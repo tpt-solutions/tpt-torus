@@ -29,36 +29,36 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 - [x] Implement basic socket I/O operations via Flow/Result API
 - [x] Write integration tests for file + socket I/O on Linux
 - [x] Write basic usage examples/docs for the Flow/Result API
-- [ ] Cut alpha release (Linux-only, file + socket I/O)
+- [x] Cut alpha release (Linux-only, file + socket I/O)
 
 ## Phase 2 (Months 4-6) — Windows & macOS Backends, Feature Parity
 
-- [ ] Implement `torus-sys` raw FFI bindings to IOCP (Windows)
-- [ ] Implement `torus-sys` raw FFI bindings to kqueue (macOS/BSD)
-- [ ] Implement `torus-backend-iocp`: interface to IOCP, utilizing kernel-managed thread pools
-- [ ] Implement `torus-backend-kqueue`: interface to kqueue for event notification
-- [ ] Design and implement the lock-free background reactor (adaptive draining) for Windows/macOS:
-  - [ ] Drains virtual SQ
-  - [ ] Translates virtual ops into native IOCP calls (Windows)
-  - [ ] Translates virtual ops into native kqueue calls (macOS)
-  - [ ] Populates virtual CQ upon completion
-- [ ] Port file + socket I/O test suite to run against Windows backend
-- [ ] Port file + socket I/O test suite to run against macOS backend
+- [x] Implement `tpt-torus-sys` raw FFI bindings to IOCP (Windows)
+- [x] Implement `tpt-torus-sys` raw FFI bindings to kqueue (macOS/BSD)
+- [x] Implement `tpt-torus-backend-iocp`: interface to IOCP, utilizing kernel-managed thread pools
+- [x] Implement `tpt-torus-backend-kqueue`: interface to kqueue for event notification
+- [x] Design and implement the lock-free background reactor (adaptive draining) for Windows/macOS:
+  - [x] Drains virtual SQ
+  - [x] Translates virtual ops into native IOCP calls (Windows)
+  - [x] Translates virtual ops into native kqueue calls (macOS)
+  - [x] Populates virtual CQ upon completion
+- [x] Port file + socket I/O test suite to run against Windows backend
+- [x] Port file + socket I/O test suite to run against macOS backend
 - [ ] Validate feature parity across Linux/Windows/macOS (same Flow/Result API, same test suite passes on all three)
-- [ ] Update CI matrix to run full test suite on all three OSes
+- [x] Update CI matrix to run full test suite on all three OSes
 
 ## Phase 3 (Months 7-9) — Safe API
 
-- [ ] Design Buffer Leasing system (app registers memory regions instead of passing raw pointers)
-- [ ] Implement Lease tracking (lock/track in-flight buffers in user-space)
-- [ ] Implement Torus Panic (descriptive, safe user-space abort on lease violation, prevents kernel corruption)
-- [ ] Add opt-out path for raw/unsafe pointer usage (must be explicit, per Fail-Safe Defaults principle)
-- [ ] Design high-level async/await wrapper API (Rust)
-- [ ] Implement high-level async/await wrapper API (Rust)
+- [x] Design Buffer Leasing system (app registers memory regions instead of passing raw pointers)
+- [x] Implement Lease tracking (lock/track in-flight buffers in user-space)
+- [x] Implement Torus Panic (descriptive, safe user-space abort on lease violation, prevents kernel corruption)
+- [x] Add opt-out path for raw/unsafe pointer usage (must be explicit, per Fail-Safe Defaults principle)
+- [x] Design high-level async/await wrapper API (Rust)
+- [x] Implement high-level async/await wrapper API (Rust)
 - [ ] Design high-level async/await wrapper API (C++)
 - [ ] Implement high-level async/await wrapper API (C++)
-- [ ] Write tests proving Torus Panic triggers correctly on freed/invalid buffer access
-- [ ] Write tests proving 90% of use cases are servable via the high-level API alone (progressive disclosure)
+- [x] Write tests proving Torus Panic triggers correctly on freed/invalid buffer access
+- [x] Write tests proving 90% of use cases are servable via the high-level API alone (progressive disclosure)
 
 ## Phase 4 (Months 10-12) — Hardware Bypass
 
@@ -71,12 +71,12 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 
 ## Cross-Cutting: Design Principles & Threat Model (apply across all phases)
 
-- [ ] Verify Progressive Disclosure: high-level async/await API covers ~90% of use cases; raw Virtual Torus API available for manual batching/linking
-- [ ] Verify Fail-Safe Defaults: buffer registration and strict sandboxing enabled by default; unsafe raw pointers require explicit opt-out
+- [x] Verify Progressive Disclosure: high-level async/await API covers ~90% of use cases; raw Virtual Torus API available for manual batching/linking
+- [x] Verify Fail-Safe Defaults: buffer registration and strict sandboxing enabled by default; unsafe raw pointers require explicit opt-out
 - [ ] Benchmark Zero-Cost Abstraction claim: unified API on Linux must compile to the same machine code as native io_uring calls (no measurable overhead)
-- [ ] Implement cgroup-aware resource limiting (cap SQ/CQ size and in-flight request count based on container quotas) — mitigates kernel resource exhaustion threat
-- [ ] Security review: confirm no invalid/freed pointer can reach the kernel via the SQ (Buffer Leasing + Torus Panic mitigation from Phase 3)
-- [ ] Document threat model and mitigations in repo (mirror spec.txt Section 5)
+- [x] Implement cgroup-aware resource limiting (cap SQ/CQ size and in-flight request count based on container quotas) — mitigates kernel resource exhaustion threat
+- [x] Security review: confirm no invalid/freed pointer can reach the kernel via the SQ (Buffer Leasing + Torus Panic mitigation from Phase 3)
+- [x] Document threat model and mitigations in repo (mirror spec.txt Section 5)
 
 ## Later / Stretch — Ecosystem Split & Language Bindings
 

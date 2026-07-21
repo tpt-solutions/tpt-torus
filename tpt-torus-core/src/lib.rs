@@ -3,18 +3,25 @@
 //! Exposes the [`Torus`] handle, and the [`Flow`] (submission) / [`Result`] (completion)
 //! types that replace raw SQE/CQE across all backends.
 
+pub mod async_api;
 pub mod backend;
+pub mod cgroup;
 pub mod error;
 pub mod flow;
+pub mod lease;
 pub mod operation;
+pub mod raw_api;
 pub mod result;
 pub mod rings;
+pub mod torus_panic;
 
 pub use error::{Error, Result};
 pub use flow::Flow;
+pub use lease::{LeaseError, LeaseRegistry, SharedLeaseRegistry};
 pub use operation::Operation;
 pub use result::Result as TorusResult;
 pub use rings::{CompletionRing, SubmissionRing};
+pub use torus_panic::TorusPanic;
 
 use backend::Backend;
 use std::sync::{Arc, Mutex};
@@ -29,6 +36,11 @@ pub struct Torus {
     cq: CompletionRing,
     backend: Mutex<Box<dyn Backend>>,
 }
+
+// SAFETY: Torus is thread-safe. The backend is behind a Mutex, and the rings
+// use atomic operations for synchronization.
+unsafe impl Send for Torus {}
+unsafe impl Sync for Torus {}
 
 impl Torus {
     /// Create a new Torus instance with the given ring size and backend.
@@ -87,6 +99,16 @@ impl Torus {
     /// Access the virtual completion ring.
     pub fn completion_ring(&self) -> &CompletionRing {
         &self.cq
+    }
+
+    /// Get raw, unguarded access to the Torus, bypassing Buffer Leasing.
+    ///
+    /// # Safety
+    ///
+    /// The returned [`RawTorus`] bypasses all buffer safety checks.
+    /// The caller is responsible for ensuring buffer validity.
+    pub unsafe fn raw(&self) -> raw_api::RawTorus<'_> {
+        raw_api::RawTorus::new(self)
     }
 }
 

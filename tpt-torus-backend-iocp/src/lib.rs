@@ -16,12 +16,12 @@ use std::thread;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Networking::WinSock::{
-    closesocket, WSABUF, WSASend, WSARecv, INVALID_SOCKET, SOCKET,
+    closesocket, WSARecv, WSASend, INVALID_SOCKET, SOCKET, WSABUF,
 };
 use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows_sys::Win32::System::IO::{
-    CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED, OVERLAPPED_ENTRY,
-    PostQueuedCompletionStatus,
+    CreateIoCompletionPort, GetQueuedCompletionStatusEx, PostQueuedCompletionStatus, OVERLAPPED,
+    OVERLAPPED_ENTRY,
 };
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -78,9 +78,8 @@ impl IocpBackend {
     /// Create a new IOCP backend.
     pub fn new() -> Result<Self, String> {
         // Create IOCP with 1 worker thread (we'll do completions in the reactor)
-        let iocp = unsafe {
-            CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, CP_THREADS)
-        };
+        let iocp =
+            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, CP_THREADS) };
         if iocp.is_null() {
             return Err(format!(
                 "CreateIoCompletionPort failed: {}",
@@ -116,11 +115,11 @@ impl IocpBackend {
         })
     }
 
-    /// Associate a file handle with the IOCP port.
-    pub fn associate(&self, handle: HANDLE) -> bool {
-        unsafe {
-            CreateIoCompletionPort(handle, self.iocp.0, 0, CP_THREADS) != 0
-        }
+    /// # Safety
+    ///
+    /// `handle` must be a valid Win32 HANDLE.
+    pub unsafe fn associate(&self, handle: HANDLE) -> bool {
+        !CreateIoCompletionPort(handle, self.iocp.0, 0, CP_THREADS).is_null()
     }
 
     /// The background reactor loop: waits for IOCP completions and posts to the virtual CQ.
@@ -166,8 +165,7 @@ impl IocpBackend {
             // Process completions
             {
                 let mut cq = completions.lock().unwrap();
-                for i in 0..num_entries as usize {
-                    let entry = &entries[i];
+                for entry in entries.iter().take(num_entries as usize) {
                     let overlapped = entry.lpOverlapped as *const TorusOverlapped;
                     if overlapped.is_null() {
                         continue;
@@ -184,9 +182,7 @@ impl IocpBackend {
 
                     let result = if bytes == 0 {
                         TorusResult::new(
-                            -std::io::Error::last_os_error()
-                                .raw_os_error()
-                                .unwrap_or(5) as i64,
+                            -std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64,
                             user_data,
                         )
                     } else {
@@ -207,7 +203,12 @@ impl Backend for IocpBackend {
 
         for flow in flows {
             match flow.operation() {
-                Operation::Read { fd, buf, len, offset } => {
+                Operation::Read {
+                    fd,
+                    buf,
+                    len,
+                    offset,
+                } => {
                     let handle = *fd as HANDLE;
 
                     let ovl = Box::new(TorusOverlapped {
@@ -226,32 +227,29 @@ impl Backend for IocpBackend {
                         ovl_ref.Anonymous.Anonymous.OffsetHigh = high;
                     }
 
-                    let ret = unsafe {
-                        ReadFile(
-                            handle,
-                            *buf as *mut u8,
-                            *len as u32,
-                            ptr::null_mut(),
-                            ovl_ptr,
-                        )
-                    };
+                    let ret =
+                        unsafe { ReadFile(handle, *buf, *len as u32, ptr::null_mut(), ovl_ptr) };
 
                     if ret == 0 {
-                        let err = std::io::Error::last_os_error()
-                            .raw_os_error()
-                            .unwrap_or(5);
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
                         // Deallocate the overlapped since it won't complete
                         unsafe {
                             drop(Box::from_raw(ovl_ptr));
                         }
-                        self.completions.lock().unwrap().push_back(
-                            TorusResult::new(-err as i64, flow.user_data()),
-                        );
+                        self.completions
+                            .lock()
+                            .unwrap()
+                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
                         self.notify.notify_one();
                     }
                     submitted += 1;
                 }
-                Operation::Write { fd, buf, len, offset } => {
+                Operation::Write {
+                    fd,
+                    buf,
+                    len,
+                    offset,
+                } => {
                     let handle = *fd as HANDLE;
 
                     let ovl = Box::new(TorusOverlapped {
@@ -267,26 +265,18 @@ impl Backend for IocpBackend {
                         ovl_ref.Anonymous.Anonymous.OffsetHigh = (off >> 32) as u32;
                     }
 
-                    let ret = unsafe {
-                        WriteFile(
-                            handle,
-                            *buf as *const u8,
-                            *len as u32,
-                            ptr::null_mut(),
-                            ovl_ptr,
-                        )
-                    };
+                    let ret =
+                        unsafe { WriteFile(handle, *buf, *len as u32, ptr::null_mut(), ovl_ptr) };
 
                     if ret == 0 {
-                        let err = std::io::Error::last_os_error()
-                            .raw_os_error()
-                            .unwrap_or(5);
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
                         unsafe {
                             drop(Box::from_raw(ovl_ptr));
                         }
-                        self.completions.lock().unwrap().push_back(
-                            TorusResult::new(-err as i64, flow.user_data()),
-                        );
+                        self.completions
+                            .lock()
+                            .unwrap()
+                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
                         self.notify.notify_one();
                     }
                     submitted += 1;
@@ -304,7 +294,7 @@ impl Backend for IocpBackend {
                     let mut bytes_read: u32 = 0;
                     let wsa_buf = WSABUF {
                         len: *len as u32,
-                        buf: *buf as *mut u8,
+                        buf: *buf,
                     };
 
                     let ret = unsafe {
@@ -320,15 +310,14 @@ impl Backend for IocpBackend {
                     };
 
                     if ret != 0 {
-                        let err = std::io::Error::last_os_error()
-                            .raw_os_error()
-                            .unwrap_or(5);
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
                         unsafe {
                             drop(Box::from_raw(ovl_ptr));
                         }
-                        self.completions.lock().unwrap().push_back(
-                            TorusResult::new(-err as i64, flow.user_data()),
-                        );
+                        self.completions
+                            .lock()
+                            .unwrap()
+                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
                         self.notify.notify_one();
                     }
                     submitted += 1;
@@ -361,20 +350,19 @@ impl Backend for IocpBackend {
                     };
 
                     if ret != 0 {
-                        let err = std::io::Error::last_os_error()
-                            .raw_os_error()
-                            .unwrap_or(5);
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
                         unsafe {
                             drop(Box::from_raw(ovl_ptr));
                         }
-                        self.completions.lock().unwrap().push_back(
-                            TorusResult::new(-err as i64, flow.user_data()),
-                        );
+                        self.completions
+                            .lock()
+                            .unwrap()
+                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
                         self.notify.notify_one();
                     }
                     submitted += 1;
                 }
-                Operation::Accept { fd, .. } => {
+                Operation::Accept { .. } => {
                     // Accept on Windows requires AcceptEx — simplified synchronous fallback
                     let user_data = flow.user_data();
                     self.completions.lock().unwrap().push_back(
@@ -383,7 +371,7 @@ impl Backend for IocpBackend {
                     self.notify.notify_one();
                     submitted += 1;
                 }
-                Operation::Connect { fd, .. } => {
+                Operation::Connect { .. } => {
                     // Connect on Windows requires ConnectEx — simplified synchronous fallback
                     let user_data = flow.user_data();
                     self.completions.lock().unwrap().push_back(
@@ -403,16 +391,18 @@ impl Backend for IocpBackend {
                             closesocket(*fd as SOCKET);
                         }
                     }
-                    self.completions.lock().unwrap().push_back(
-                        TorusResult::new(0, flow.user_data()),
-                    );
+                    self.completions
+                        .lock()
+                        .unwrap()
+                        .push_back(TorusResult::new(0, flow.user_data()));
                     self.notify.notify_one();
                     submitted += 1;
                 }
             }
         }
 
-        self.in_flight.fetch_add(submitted as u32, Ordering::Relaxed);
+        self.in_flight
+            .fetch_add(submitted as u32, Ordering::Relaxed);
         Ok(submitted)
     }
 
@@ -431,27 +421,24 @@ impl Backend for IocpBackend {
             return Ok(());
         }
 
-        let mut cq = self.completions.lock().unwrap();
-        while cq.is_empty() {
-            let timeout = if timeout_us == 0 {
-                None
-            } else {
-                Some(std::time::Duration::from_micros(timeout_us))
-            };
-            let result = self
-                .notify
-                .wait_timeout(
-                    cq,
-                    timeout.unwrap_or(std::time::Duration::from_secs(3600)),
-                )
-                .unwrap();
-            cq = result.0;
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_micros(timeout_us))
+            .unwrap_or_else(std::time::Instant::now);
 
-            if timeout.is_some() && result.1.timed_out() {
-                return Err(tpt_torus_core::error::Error::Os(258)); // WAIT_TIMEOUT
+        loop {
+            {
+                let cq = self.completions.lock().unwrap();
+                if !cq.is_empty() {
+                    return Ok(());
+                }
             }
+
+            if std::time::Instant::now() >= deadline {
+                return Ok(());
+            }
+
+            std::thread::yield_now();
         }
-        Ok(())
     }
 
     fn in_flight(&self) -> u32 {
@@ -465,7 +452,7 @@ impl Drop for IocpBackend {
 
         // Post a dummy completion to wake the reactor
         unsafe {
-            PostQueuedCompletionStatus(self.iocp, 0, 0, ptr::null_mut());
+            PostQueuedCompletionStatus(self.iocp.0, 0, 0, ptr::null_mut());
         }
 
         if let Some(handle) = self._reactor.take() {
@@ -473,7 +460,7 @@ impl Drop for IocpBackend {
         }
 
         unsafe {
-            CloseHandle(self.iocp);
+            CloseHandle(self.iocp.0);
         }
     }
 }

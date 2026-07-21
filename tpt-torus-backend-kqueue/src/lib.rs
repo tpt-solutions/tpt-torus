@@ -94,7 +94,10 @@ impl KqueueBackend {
     pub fn new() -> Result<Self, String> {
         let kq = unsafe { kqueue() };
         if kq < 0 {
-            return Err(format!("kqueue() failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "kqueue() failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let completions = Arc::new(Mutex::new(VecDeque::new()));
@@ -245,7 +248,12 @@ impl Backend for KqueueBackend {
 
         for flow in flows {
             match flow.operation() {
-                Operation::Read { fd, buf, len, offset } => {
+                Operation::Read {
+                    fd,
+                    buf,
+                    len,
+                    offset,
+                } => {
                     // File read — dispatch to thread pool (kqueue doesn't support async file I/O)
                     let fd = *fd;
                     let buf = *buf;
@@ -263,7 +271,12 @@ impl Backend for KqueueBackend {
                     self.unregister(fd);
                     submitted += 1;
                 }
-                Operation::Write { fd, buf, len, offset } => {
+                Operation::Write {
+                    fd,
+                    buf,
+                    len,
+                    offset,
+                } => {
                     let fd = *fd;
                     let buf = *buf;
                     let len = *len;
@@ -323,9 +336,7 @@ impl Backend for KqueueBackend {
                     self.register_read(fd, user_data);
 
                     // Synchronous recv
-                    let result = unsafe {
-                        libc::recv(fd, buf as *mut libc::c_void, *len, 0)
-                    };
+                    let result = unsafe { libc::recv(fd, buf as *mut libc::c_void, *len, 0) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     self.unregister(fd);
                     submitted += 1;
@@ -337,9 +348,7 @@ impl Backend for KqueueBackend {
                     self.register_write(fd, user_data);
 
                     // Synchronous send
-                    let result = unsafe {
-                        libc::send(fd, buf as *const libc::c_void, *len, 0)
-                    };
+                    let result = unsafe { libc::send(fd, buf as *const libc::c_void, *len, 0) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     self.unregister(fd);
                     submitted += 1;
@@ -381,10 +390,7 @@ impl Backend for KqueueBackend {
             };
             let result = self
                 .notify
-                .wait_timeout(
-                    cq,
-                    timeout.unwrap_or(std::time::Duration::from_secs(3600)),
-                )
+                .wait_timeout(cq, timeout.unwrap_or(std::time::Duration::from_secs(3600)))
                 .unwrap();
             cq = result.0;
 

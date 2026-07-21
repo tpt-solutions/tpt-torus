@@ -1,0 +1,19 @@
+[package]
+name = "tpt-torus-cxx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "C-compatible FFI and C++20 coroutine wrapper for TPT Torus."
+
+[lib]
+name = "tpt_torus_cxx"
+path = "src/lib.rs"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tpt-torus-core = { path = "../tpt-torus-core" }
+libc = "0.2"
+
+[features]
+default = []
