@@ -62,8 +62,8 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 
 ## Phase 4 (Months 10-12) — Hardware Bypass
 
-- [x] Integrate SPDK for user-space storage I/O (NVMe bypass)
-- [x] Integrate DPDK for user-space networking I/O
+- [ ] Integrate SPDK for user-space storage I/O (NVMe bypass) — `tpt-torus-hw/src/spdk.rs` API surface exists but every op returns `HwError::NotAvailable`; no real libspdk linkage (see Platform Review Follow-ups)
+- [ ] Integrate DPDK for user-space networking I/O — `tpt-torus-hw/src/dpdk.rs` API surface exists but every op returns `HwError::NotAvailable`; no real libdpdk linkage (see Platform Review Follow-ups)
 - [x] Design GPU-Direct orchestration API (DMA transfers, NVMe -> GPU VRAM, bypassing system RAM)
 - [x] Implement GPU-Direct orchestration API
 - [x] Integrate GPU-Direct with io_uring for real NVMe submissions
@@ -113,15 +113,15 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 
 ### Bugs / correctness
 
-- [ ] Reconcile `todo.md` checkmarks against actual implementation status — several Phase 4 items are marked `[x]` but the underlying code is stubbed (see below); merge or delete the stray untracked `todo 1260721.md`
+- [x] Reconcile `todo.md` checkmarks against actual implementation status — several Phase 4 items are marked `[x]` but the underlying code is stubbed (see below); merge or delete the stray untracked `todo 1260721.md`
 - [ ] Implement real SPDK integration in `tpt-torus-hw/src/spdk.rs` (currently a stub returning "requires SPDK to be installed and linked", `spdk.rs:147`)
 - [ ] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (currently always returns `HwError::NotAvailable`, `dpdk.rs:102,191,199,207,263,270`)
-- [ ] Run `tpt-torus-hw` hardware-bypass tests in default CI, or clearly document that `gpu_direct`/`spdk`/`dpdk` features are opt-in and untested by default
-- [ ] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); add a code-level TODO/tracking note in the meantime if not fixed immediately
+- [x] Run `tpt-torus-hw` hardware-bypass tests in default CI, or clearly document that `gpu_direct`/`spdk`/`dpdk` features are opt-in and untested by default
+- [ ] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); code-level TODO/tracking note added in the meantime (`async_api.rs` module doc, see below) — actual waker-registration fix still open
 - [ ] Implement `Operation::Accept`/`Operation::Connect` in `tpt-torus-backend-iocp` via `AcceptEx`/`ConnectEx` instead of returning ENOSYS (`tpt-torus-backend-iocp/src/lib.rs:365-382`)
-- [ ] Fix TOCTOU race in `LeaseRegistry::register` — check-then-insert must happen under a single write lock, not read-then-write (`tpt-torus-core/src/lease.rs:52-78`)
-- [ ] Add a concurrent/multithreaded test for `LeaseRegistry::register` to cover the race above
-- [ ] Harden `lease.rs` range/counter edge cases: `regions.range(..addr + 1)` overflow at `addr == usize::MAX`, `in_flight: u32` unchecked increment (use `saturating_add`)
+- [x] Fix TOCTOU race in `LeaseRegistry::register` — check-then-insert must happen under a single write lock, not read-then-write (`tpt-torus-core/src/lease.rs:52-78`)
+- [x] Add a concurrent/multithreaded test for `LeaseRegistry::register` to cover the race above
+- [x] Harden `lease.rs` range/counter edge cases: `regions.range(..addr + 1)` overflow at `addr == usize::MAX`, `in_flight: u32` unchecked increment (use `saturating_add`)
 - [ ] Add cbindgen-generated header for `tpt-torus-cxx` instead of hand-maintained `torus.hpp` (currently can drift from `lib.rs`)
 - [ ] Add CMake/build-system integration and a runnable example for `tpt-torus-cxx`
 - [ ] Add a cross-backend conformance test suite that runs the identical `Operation` set against uring/iocp/kqueue and asserts identical results
@@ -145,8 +145,8 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 - [ ] Add a minimal `TorusAsync` example (caveat as scaffold until the waker fix above lands)
 - [ ] Add `CONTRIBUTING.md`
 - [ ] Add `CHANGELOG.md`
-- [ ] Wire `tpt-torus-hw/benches/hw_bench.rs` into CI (even a "does it run" smoke job)
-- [ ] Add an MSRV pin/check to CI
+- [x] Wire `tpt-torus-hw/benches/hw_bench.rs` into CI (even a "does it run" smoke job)
+- [x] Add an MSRV pin/check to CI
 - [ ] Add fuzzing (e.g. `cargo-fuzz`) for the FFI/parsing boundary in `tpt-torus-sys`
 - [ ] Add code coverage reporting to CI
 - [ ] Convert the root README's `ignore`-tagged code sample into a real doctest or point it at a compiled example file

@@ -39,3 +39,26 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Hardware Bypass feature smoke build
+        run: cargo build -p tpt-torus-hw --all-targets --features spdk,dpdk,gpu_direct
+
+      - name: Hardware Bypass benchmark smoke run
+        run: cargo bench -p tpt-torus-hw --features gpu_direct -- --test
+
+  msrv:
+    name: MSRV check (1.87.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned MSRV Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.87.0"
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build at MSRV
+        run: cargo build --workspace --all-targets

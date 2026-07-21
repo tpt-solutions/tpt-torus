@@ -113,7 +113,7 @@ impl LeaseRegistry {
 
         // Find the region containing this address
         let region = regions
-            .range_mut(..addr + 1)
+            .range_mut(..addr.saturating_add(1))
             .next_back()
             .map(|(_, r)| r)
             .ok_or(LeaseError::NotRegistered)?;
@@ -122,21 +122,22 @@ impl LeaseRegistry {
             return Err(LeaseError::NotRegistered);
         }
 
-        if addr + len > region.start + region.len {
+        let requested_end = addr.saturating_add(len);
+        if requested_end > region.start + region.len {
             return Err(LeaseError::OutOfBounds {
-                requested_end: addr + len,
+                requested_end,
                 region_end: region.start + region.len,
             });
         }
 
-        region.in_flight += 1;
+        region.in_flight = region.in_flight.saturating_add(1);
         Ok(())
     }
 
     /// Mark a buffer as no longer in-flight after I/O completion.
     pub fn checkin(&self, addr: usize) {
         let mut regions = self.regions.write().unwrap();
-        if let Some((_key, region)) = regions.range_mut(..addr + 1).next_back() {
+        if let Some((_key, region)) = regions.range_mut(..addr.saturating_add(1)).next_back() {
             if region.contains(addr) && region.in_flight > 0 {
                 region.in_flight -= 1;
             }
@@ -151,7 +152,7 @@ impl LeaseRegistry {
     pub fn verify(&self, addr: usize, len: usize) -> Result<bool, LeaseError> {
         let regions = self.regions.read().unwrap();
         let region = regions
-            .range(..addr + 1)
+            .range(..addr.saturating_add(1))
             .next_back()
             .map(|(_, r)| r)
             .ok_or(LeaseError::NotRegistered)?;
@@ -160,9 +161,10 @@ impl LeaseRegistry {
             return Err(LeaseError::NotRegistered);
         }
 
-        if addr + len > region.start + region.len {
+        let requested_end = addr.saturating_add(len);
+        if requested_end > region.start + region.len {
             return Err(LeaseError::OutOfBounds {
-                requested_end: addr + len,
+                requested_end,
                 region_end: region.start + region.len,
             });
         }

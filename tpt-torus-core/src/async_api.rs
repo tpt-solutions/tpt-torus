@@ -23,6 +23,20 @@
 //! // Send to a socket
 //! torus.send(fd, &data).await?;
 //! ```
+//!
+//! # TODO: not wakeup-correct yet
+//!
+//! None of the `*Future::poll` impls below register a real waker with the
+//! backend reactor. Each one re-polls itself instead of parking: on the
+//! submit step it calls `cx.waker().wake_by_ref()` immediately to force an
+//! eager re-poll, and on the reap step an empty result just returns
+//! `Poll::Pending` with no waker stored anywhere, relying entirely on the
+//! executor to keep re-polling. This works with executors that busy-loop
+//! ready tasks (as our tests do) but is not correct for a real async
+//! runtime (tokio/async-std), which will park the task and never wake it.
+//! See `todo.md` → Platform Review Follow-ups → "Fix `async_api.rs` futures
+//! to register real wakers with the backend reactor instead of busy
+//! re-polling" for the tracked fix.
 
 use crate::backend::Backend;
 use crate::flow::Flow;
