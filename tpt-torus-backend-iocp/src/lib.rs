@@ -14,40 +14,51 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::IO::{
-    CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED,
-    OVERLAPPED_ENTRY, PostQueuedCompletionStatus,
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Networking::WinSock::{
+    closesocket, WSABUF, WSASend, WSARecv, INVALID_SOCKET, SOCKET,
 };
 use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
-use windows_sys::Win32::Networking::Sockets::{
-    closesocket, recv, send, SOCKET, WSASend, WSARecv, WSADATA, WSAStartup,
+use windows_sys::Win32::System::IO::{
+    CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED, OVERLAPPED_ENTRY,
+    PostQueuedCompletionStatus,
 };
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 const MAX_COMPLETIONS: u32 = 256;
 const CP_THREADS: u32 = 1;
-const STATUS_BUFFER: u64 = 0x80000000; // Custom status to distinguish completions
 
 // ─── Overlapped wrapper ────────────────────────────────────────────────────
 
+/// Custom overlapped structure that carries Torus user data.
+///
+/// SAFETY: This struct must be placed in a boxed allocation that outlives
+/// the I/O operation. The reactor thread reads `user_data` after the kernel
+/// signals completion.
 #[repr(C)]
 struct TorusOverlapped {
     overlapped: OVERLAPPED,
     user_data: u64,
-    op_tag: u32,
 }
 
 unsafe impl Send for TorusOverlapped {}
 unsafe impl Sync for TorusOverlapped {}
+
+// ─── Safe handle wrapper for thread safety ─────────────────────────────────
+
+/// Wrapper around a raw HANDLE that implements Send/Sync.
+/// SAFETY: The IOCP handle is thread-safe for the operations we use.
+struct SafeHandle(HANDLE);
+unsafe impl Send for SafeHandle {}
+unsafe impl Sync for SafeHandle {}
 
 // ─── IOCP Backend ──────────────────────────────────────────────────────────
 
 /// Windows IOCP backend with a background reactor.
 pub struct IocpBackend {
     /// IOCP port handle.
-    iocp: HANDLE,
+    iocp: SafeHandle,
     /// Shared completion queue state.
     completions: Arc<Mutex<VecDeque<TorusResult>>>,
     /// Condition variable woken by the reactor on new completions.
@@ -66,18 +77,11 @@ unsafe impl Sync for IocpBackend {}
 impl IocpBackend {
     /// Create a new IOCP backend.
     pub fn new() -> Result<Self, String> {
-        // Initialize Winsock
-        let mut wsa: WSADATA = unsafe { std::mem::zeroed() };
-        let err = unsafe { WSAStartup(0x0202, &mut wsa) };
-        if err != 0 {
-            return Err(format!("WSAStartup failed: {}", err));
-        }
-
-        // Create IOCP
+        // Create IOCP with 1 worker thread (we'll do completions in the reactor)
         let iocp = unsafe {
-            CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, CP_THREADS)
+            CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, CP_THREADS)
         };
-        if iocp == 0 {
+        if iocp.is_null() {
             return Err(format!(
                 "CreateIoCompletionPort failed: {}",
                 std::io::Error::last_os_error()
@@ -91,14 +95,19 @@ impl IocpBackend {
         let reactor_completions = completions.clone();
         let reactor_notify = notify.clone();
         let reactor_shutdown = shutdown.clone();
-        let reactor_iocp = iocp;
+        let reactor_iocp = SafeHandle(iocp);
 
         let reactor = thread::spawn(move || {
-            Self::reactor_loop(reactor_iocp, reactor_completions, reactor_notify, reactor_shutdown);
+            Self::reactor_loop(
+                reactor_iocp,
+                reactor_completions,
+                reactor_notify,
+                reactor_shutdown,
+            );
         });
 
         Ok(Self {
-            iocp,
+            iocp: SafeHandle(iocp),
             completions,
             notify,
             in_flight: AtomicU32::new(0),
@@ -107,16 +116,22 @@ impl IocpBackend {
         })
     }
 
+    /// Associate a file handle with the IOCP port.
+    pub fn associate(&self, handle: HANDLE) -> bool {
+        unsafe {
+            CreateIoCompletionPort(handle, self.iocp.0, 0, CP_THREADS) != 0
+        }
+    }
+
     /// The background reactor loop: waits for IOCP completions and posts to the virtual CQ.
     fn reactor_loop(
-        iocp: HANDLE,
+        iocp: SafeHandle,
         completions: Arc<Mutex<VecDeque<TorusResult>>>,
         notify: Arc<Condvar>,
         shutdown: Arc<AtomicBool>,
     ) {
         let mut entries: [OVERLAPPED_ENTRY; MAX_COMPLETIONS as usize] =
             unsafe { std::mem::zeroed() };
-        let mut timeout_ms: u32 = 100; // Wake periodically to check shutdown
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
@@ -126,23 +141,22 @@ impl IocpBackend {
             let mut num_entries = 0u32;
             let ret = unsafe {
                 GetQueuedCompletionStatusEx(
-                    iocp,
+                    iocp.0,
                     entries.as_mut_ptr(),
                     MAX_COMPLETIONS,
                     &mut num_entries,
-                    timeout_ms,
-                    0, // alertable
+                    100, // 100ms timeout to check shutdown flag
+                    0,
                 )
             };
 
             if ret == 0 {
+                // Could be timeout (ERROR_TIMEOUT = 258) or real error
                 let err = std::io::Error::last_os_error();
                 if err.raw_os_error() == Some(258) {
-                    // WAIT_TIMEOUT — loop back to check shutdown
-                    continue;
+                    continue; // Timeout — check shutdown
                 }
-                // Real error — break
-                break;
+                break; // Real error
             }
 
             if num_entries == 0 {
@@ -163,9 +177,18 @@ impl IocpBackend {
                     let bytes = entry.dwNumberOfBytesTransferred;
                     let user_data = torus_ovl.user_data;
 
-                    let result = if bytes == 0 && torus_ovl.op_tag != 0 {
-                        // Error or special status
-                        TorusResult::new(-std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64, user_data)
+                    // Deallocate the overlapped box
+                    unsafe {
+                        drop(Box::from_raw(overlapped as *mut TorusOverlapped));
+                    }
+
+                    let result = if bytes == 0 {
+                        TorusResult::new(
+                            -std::io::Error::last_os_error()
+                                .raw_os_error()
+                                .unwrap_or(5) as i64,
+                            user_data,
+                        )
                     } else {
                         TorusResult::new(bytes as i64, user_data)
                     };
@@ -176,165 +199,220 @@ impl IocpBackend {
             notify.notify_all();
         }
     }
-
-    fn post_completion(&self, result: TorusResult) {
-        self.completions.lock().unwrap().push_back(result);
-        self.notify.notify_one();
-    }
 }
 
 impl Backend for IocpBackend {
     fn submit(&self, flows: &[Flow]) -> tpt_torus_core::error::Result<usize> {
-        let mut submitted = 0;
+        let mut submitted = 0usize;
 
         for flow in flows {
             match flow.operation() {
                 Operation::Read { fd, buf, len, offset } => {
                     let handle = *fd as HANDLE;
-                    let mut overlapped: TorusOverlapped = unsafe { std::mem::zeroed() };
-                    overlapped.user_data = flow.user_data();
-                    overlapped.op_tag = 1;
+
+                    let ovl = Box::new(TorusOverlapped {
+                        overlapped: unsafe { std::mem::zeroed() },
+                        user_data: flow.user_data(),
+                    });
+                    let ovl_ptr = Box::into_raw(ovl) as *mut OVERLAPPED;
 
                     unsafe {
-                        (*overlapped.overlapped.Anonymous.Anonymous.OffsetHigh as *mut u32)
-                            .write((*offset >> 32) as u32);
-                        (*overlapped.overlapped.Anonymous.Anonymous.Offset as *mut u32)
-                            .write(*offset as u32);
+                        let ovl_ref = &mut *ovl_ptr;
+                        // Set the offset in the overlapped structure
+                        let off = *offset;
+                        let low = off as u32;
+                        let high = (off >> 32) as u32;
+                        ovl_ref.Anonymous.Anonymous.Offset = low;
+                        ovl_ref.Anonymous.Anonymous.OffsetHigh = high;
                     }
 
                     let ret = unsafe {
                         ReadFile(
                             handle,
-                            *buf as *const _,
+                            *buf as *mut u8,
                             *len as u32,
                             ptr::null_mut(),
-                            &mut overlapped.overlapped,
+                            ovl_ptr,
                         )
                     };
 
                     if ret == 0 {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        self.post_completion(TorusResult::new(-err as i64, flow.user_data()));
-                    } else {
-                        // Operation submitted — overlapped will complete asynchronously
+                        let err = std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(5);
+                        // Deallocate the overlapped since it won't complete
+                        unsafe {
+                            drop(Box::from_raw(ovl_ptr));
+                        }
+                        self.completions.lock().unwrap().push_back(
+                            TorusResult::new(-err as i64, flow.user_data()),
+                        );
+                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
                 Operation::Write { fd, buf, len, offset } => {
                     let handle = *fd as HANDLE;
-                    let mut overlapped: TorusOverlapped = unsafe { std::mem::zeroed() };
-                    overlapped.user_data = flow.user_data();
-                    overlapped.op_tag = 2;
+
+                    let ovl = Box::new(TorusOverlapped {
+                        overlapped: unsafe { std::mem::zeroed() },
+                        user_data: flow.user_data(),
+                    });
+                    let ovl_ptr = Box::into_raw(ovl) as *mut OVERLAPPED;
 
                     unsafe {
-                        (*overlapped.overlapped.Anonymous.Anonymous.OffsetHigh as *mut u32)
-                            .write((*offset >> 32) as u32);
-                        (*overlapped.overlapped.Anonymous.Anonymous.Offset as *mut u32)
-                            .write(*offset as u32);
+                        let ovl_ref = &mut *ovl_ptr;
+                        let off = *offset;
+                        ovl_ref.Anonymous.Anonymous.Offset = off as u32;
+                        ovl_ref.Anonymous.Anonymous.OffsetHigh = (off >> 32) as u32;
                     }
 
                     let ret = unsafe {
                         WriteFile(
                             handle,
-                            *buf as *const _,
+                            *buf as *const u8,
                             *len as u32,
                             ptr::null_mut(),
-                            &mut overlapped.overlapped,
+                            ovl_ptr,
                         )
                     };
 
                     if ret == 0 {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        self.post_completion(TorusResult::new(-err as i64, flow.user_data()));
+                        let err = std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(5);
+                        unsafe {
+                            drop(Box::from_raw(ovl_ptr));
+                        }
+                        self.completions.lock().unwrap().push_back(
+                            TorusResult::new(-err as i64, flow.user_data()),
+                        );
+                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
                 Operation::Recv { fd, buf, len } => {
                     let socket = *fd as SOCKET;
-                    let mut overlapped: TorusOverlapped = unsafe { std::mem::zeroed() };
-                    overlapped.user_data = flow.user_data();
-                    overlapped.op_tag = 3;
+
+                    let ovl = Box::new(TorusOverlapped {
+                        overlapped: unsafe { std::mem::zeroed() },
+                        user_data: flow.user_data(),
+                    });
+                    let ovl_ptr = Box::into_raw(ovl);
 
                     let mut flags: u32 = 0;
                     let mut bytes_read: u32 = 0;
+                    let wsa_buf = WSABUF {
+                        len: *len as u32,
+                        buf: *buf as *mut u8,
+                    };
 
                     let ret = unsafe {
                         WSARecv(
                             socket,
-                            [windows_sys::Win32::Networking::Sockets::WSABUF {
-                                len: *len as u32,
-                                buf: *buf as *mut _,
-                            }]
-                            .as_ptr(),
+                            &wsa_buf,
                             1,
                             &mut bytes_read,
                             &mut flags,
-                            &mut overlapped.overlapped,
+                            &mut (*ovl_ptr).overlapped,
                             None,
                         )
                     };
 
                     if ret != 0 {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        self.post_completion(TorusResult::new(-err as i64, flow.user_data()));
+                        let err = std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(5);
+                        unsafe {
+                            drop(Box::from_raw(ovl_ptr));
+                        }
+                        self.completions.lock().unwrap().push_back(
+                            TorusResult::new(-err as i64, flow.user_data()),
+                        );
+                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
                 Operation::Send { fd, buf, len } => {
                     let socket = *fd as SOCKET;
-                    let mut overlapped: TorusOverlapped = unsafe { std::mem::zeroed() };
-                    overlapped.user_data = flow.user_data();
-                    overlapped.op_tag = 4;
+
+                    let ovl = Box::new(TorusOverlapped {
+                        overlapped: unsafe { std::mem::zeroed() },
+                        user_data: flow.user_data(),
+                    });
+                    let ovl_ptr = Box::into_raw(ovl);
 
                     let mut bytes_sent: u32 = 0;
+                    let wsa_buf = WSABUF {
+                        len: *len as u32,
+                        buf: *buf as *mut u8,
+                    };
 
                     let ret = unsafe {
                         WSASend(
                             socket,
-                            [windows_sys::Win32::Networking::Sockets::WSABUF {
-                                len: *len as u32,
-                                buf: *buf as *const _ as *mut _,
-                            }]
-                            .as_ptr(),
+                            &wsa_buf,
                             1,
                             &mut bytes_sent,
                             0,
-                            &mut overlapped.overlapped,
+                            &mut (*ovl_ptr).overlapped,
                             None,
                         )
                     };
 
                     if ret != 0 {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        self.post_completion(TorusResult::new(-err as i64, flow.user_data()));
+                        let err = std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(5);
+                        unsafe {
+                            drop(Box::from_raw(ovl_ptr));
+                        }
+                        self.completions.lock().unwrap().push_back(
+                            TorusResult::new(-err as i64, flow.user_data()),
+                        );
+                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
                 Operation::Accept { fd, .. } => {
-                    // Accept on Windows uses AcceptEx — simplified here
-                    let _ = fd;
+                    // Accept on Windows requires AcceptEx — simplified synchronous fallback
+                    let user_data = flow.user_data();
+                    self.completions.lock().unwrap().push_back(
+                        TorusResult::new(-120, user_data), // ENOSYS — not yet implemented
+                    );
+                    self.notify.notify_one();
                     submitted += 1;
                 }
                 Operation::Connect { fd, .. } => {
-                    // Connect on Windows uses ConnectEx — simplified here
-                    let _ = fd;
+                    // Connect on Windows requires ConnectEx — simplified synchronous fallback
+                    let user_data = flow.user_data();
+                    self.completions.lock().unwrap().push_back(
+                        TorusResult::new(-120, user_data), // ENOSYS — not yet implemented
+                    );
+                    self.notify.notify_one();
                     submitted += 1;
                 }
                 Operation::Close { fd } => {
-                    // Close is synchronous
                     let handle = *fd as HANDLE;
-                    if *fd as SOCKET != INVALID_SOCKET as _ {
-                        unsafe { closesocket(*fd as SOCKET) };
+                    if *fd as SOCKET == INVALID_SOCKET {
+                        unsafe {
+                            CloseHandle(handle);
+                        }
                     } else {
-                        unsafe { CloseHandle(handle) };
+                        unsafe {
+                            closesocket(*fd as SOCKET);
+                        }
                     }
-                    self.post_completion(TorusResult::new(0, flow.user_data()));
+                    self.completions.lock().unwrap().push_back(
+                        TorusResult::new(0, flow.user_data()),
+                    );
+                    self.notify.notify_one();
                     submitted += 1;
                 }
             }
         }
 
-        self.in_flight.fetch_add(submitted, Ordering::Relaxed);
+        self.in_flight.fetch_add(submitted as u32, Ordering::Relaxed);
         Ok(submitted)
     }
 
@@ -360,7 +438,13 @@ impl Backend for IocpBackend {
             } else {
                 Some(std::time::Duration::from_micros(timeout_us))
             };
-            let result = self.notify.wait_timeout(cq, timeout.unwrap_or(std::time::Duration::from_secs(3600))).unwrap();
+            let result = self
+                .notify
+                .wait_timeout(
+                    cq,
+                    timeout.unwrap_or(std::time::Duration::from_secs(3600)),
+                )
+                .unwrap();
             cq = result.0;
 
             if timeout.is_some() && result.1.timed_out() {
@@ -381,7 +465,7 @@ impl Drop for IocpBackend {
 
         // Post a dummy completion to wake the reactor
         unsafe {
-            PostQueuedCompletionStatus(self.iocp, 0, 0, ptr::null());
+            PostQueuedCompletionStatus(self.iocp, 0, 0, ptr::null_mut());
         }
 
         if let Some(handle) = self._reactor.take() {
