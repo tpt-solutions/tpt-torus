@@ -7,6 +7,7 @@ members = [
     "tpt-torus-backend-iocp",
     "tpt-torus-backend-kqueue",
     "tpt-torus-cxx",
+    "tpt-torus-hw",
 ]
 
 [workspace.package]

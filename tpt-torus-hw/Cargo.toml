@@ -1,0 +1,29 @@
+[package]
+name = "tpt-torus-hw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hardware Bypass layer for TPT Torus: SPDK, DPDK, and GPU-Direct integration."
+
+[lib]
+name = "tpt_torus_hw"
+path = "src/lib.rs"
+
+[dependencies]
+tpt-torus-core = { path = "../tpt-torus-core" }
+libc = "0.2"
+libloading = { version = "0.8", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "hw_bench"
+harness = false
+
+[features]
+default = []
+spdk = []      # Enable SPDK integration (requires SPDK installed)
+dpdk = []      # Enable DPDK integration (requires DPDK installed)
+gpu_direct = ["libloading"] # Enable GPU-Direct orchestration (requires CUDA)

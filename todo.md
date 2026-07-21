@@ -55,25 +55,26 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 - [x] Add opt-out path for raw/unsafe pointer usage (must be explicit, per Fail-Safe Defaults principle)
 - [x] Design high-level async/await wrapper API (Rust)
 - [x] Implement high-level async/await wrapper API (Rust)
-- [ ] Design high-level async/await wrapper API (C++)
-- [ ] Implement high-level async/await wrapper API (C++)
+- [x] Design high-level async/await wrapper API (C++)
+- [x] Implement high-level async/await wrapper API (C++)
 - [x] Write tests proving Torus Panic triggers correctly on freed/invalid buffer access
 - [x] Write tests proving 90% of use cases are servable via the high-level API alone (progressive disclosure)
 
 ## Phase 4 (Months 10-12) — Hardware Bypass
 
-- [ ] Integrate SPDK for user-space storage I/O (NVMe bypass)
-- [ ] Integrate DPDK for user-space networking I/O
-- [ ] Design GPU-Direct orchestration API (DMA transfers, NVMe -> GPU VRAM, bypassing system RAM)
-- [ ] Implement GPU-Direct orchestration API
-- [ ] Write benchmarks comparing Hardware Bypass path vs. standard kernel path
-- [ ] Write docs/examples for SPDK/DPDK/GPU-Direct usage
+- [x] Integrate SPDK for user-space storage I/O (NVMe bypass)
+- [x] Integrate DPDK for user-space networking I/O
+- [x] Design GPU-Direct orchestration API (DMA transfers, NVMe -> GPU VRAM, bypassing system RAM)
+- [x] Implement GPU-Direct orchestration API
+- [x] Integrate GPU-Direct with io_uring for real NVMe submissions
+- [x] Write benchmarks comparing Hardware Bypass path vs. standard kernel path
+- [x] Write docs/examples for SPDK/DPDK/GPU-Direct usage
 
 ## Cross-Cutting: Design Principles & Threat Model (apply across all phases)
 
 - [x] Verify Progressive Disclosure: high-level async/await API covers ~90% of use cases; raw Virtual Torus API available for manual batching/linking
 - [x] Verify Fail-Safe Defaults: buffer registration and strict sandboxing enabled by default; unsafe raw pointers require explicit opt-out
-- [ ] Benchmark Zero-Cost Abstraction claim: unified API on Linux must compile to the same machine code as native io_uring calls (no measurable overhead)
+- [x] Benchmark Zero-Cost Abstraction claim: unified API on Linux must compile to the same machine code as native io_uring calls (no measurable overhead)
 - [x] Implement cgroup-aware resource limiting (cap SQ/CQ size and in-flight request count based on container quotas) — mitigates kernel resource exhaustion threat
 - [x] Security review: confirm no invalid/freed pointer can reach the kernel via the SQ (Buffer Leasing + Torus Panic mitigation from Phase 3)
 - [x] Document threat model and mitigations in repo (mirror spec.txt Section 5)
