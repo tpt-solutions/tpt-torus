@@ -1,0 +1,14 @@
+[package]
+name = "tpt-torus-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Virtual Torus abstraction, Safe API, and Torus handle."
+
+[lib]
+name = "tpt_torus_core"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"

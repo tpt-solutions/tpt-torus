@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "tpt-torus-sys",
+    "tpt-torus-core",
+    "tpt-torus-backend-uring",
+    "tpt-torus-backend-iocp",
+    "tpt-torus-backend-kqueue",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/REPLACE_ME/tpt-torus"

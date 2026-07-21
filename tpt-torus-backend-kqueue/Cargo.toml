@@ -1,0 +1,16 @@
+[package]
+name = "tpt-torus-backend-kqueue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "macOS/BSD kqueue backend engine for TPT Torus."
+
+[lib]
+name = "tpt_torus_backend_kqueue"
+path = "src/lib.rs"
+
+[dependencies]
+tpt-torus-sys = { path = "../tpt-torus-sys" }
+tpt-torus-core = { path = "../tpt-torus-core" }
+libc = "0.2"

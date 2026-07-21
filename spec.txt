@@ -1,0 +1,66 @@
+Design Document: TPT Torus
+Version: 1.0.0-draft
+Status: Proposal / RFC
+Domain: Systems Programming / Asynchronous I/O
+1. Executive Summary
+This document outlines the architecture for TPT Torus, a unified, cross-platform, high-performance asynchronous I/O framework. TPT Torus abstracts the underlying OS-specific I/O multiplexing mechanisms (Linux io_uring, Windows IOCP, macOS/BSD kqueue) behind a single, memory-safe, zero-cost API.
+By introducing a "Virtual Torus" abstraction, TPT Torus allows developers to write against a consistent ring-buffer paradigm on every operating system. Furthermore, it introduces a "Hardware Bypass" layer to allow direct user-space interaction with NVMe and network hardware, effectively making the framework not just an abstraction, but a performance multiplier.
+2. Problem Statement
+Currently, high-performance I/O on modern operating systems is fractured and fraught with friction:
+Fragmentation: Developers must write and maintain separate code paths for io_uring (Linux), IOCP (Windows), and kqueue (macOS).
+Complexity & Ergonomics: Raw io_uring requires manual management of shared memory ring buffers, complex state machines, and linked operations.
+Security Risks: The shared-memory nature of io_uring has led to numerous kernel-level CVEs. Passing raw pointers between user-space and kernel-space is inherently dangerous.
+The "Lowest Common Denominator" Penalty: Existing cross-platform libraries often fall back to older, slower paradigms (like thread pools or basic epoll) to maintain compatibility, sacrificing the zero-syscall benefits of modern interfaces.
+3. Core Architecture
+TPT Torus is built on a four-layer architecture designed to provide a unified API while maximizing native performance.
+Layer 1: The Native Backends (The Engines)
+Instead of emulating a single paradigm across all OSes, this layer contains highly optimized, OS-specific adapters.
+Linux Engine: Direct interface to io_uring (Submission/Completion rings).
+Windows Engine: Interface to IOCP, utilizing kernel-managed thread pools.
+BSD/macOS Engine: Interface to kqueue for event notification.
+Layer 2: The Unified Ring Abstraction (The Core)
+This is the core layer that solves the cross-platform problem without sacrificing performance.
+The Virtual Torus: The framework exposes a virtual Submission Queue (SQ) and Completion Queue (CQ) to the application on all platforms.
+Adaptive Draining:
+On Linux, the virtual rings map directly to kernel shared memory.
+On Windows/macOS, the virtual rings exist in user-space. A highly optimized, lock-free background reactor drains the virtual SQ and translates the operations into native IOCP/kqueue calls, then populates the virtual CQ upon completion.
+Result: The application developer always writes code against the Torus paradigm, ensuring consistent logic across platforms.
+Layer 3: The Safe API (The Shield)
+To solve the security and complexity issues of raw io_uring, TPT Torus introduces a radically improved Developer Experience (DX):
+The Torus Handle: The main context object is a single, thread-safe Torus instance, replacing the need to manually manage multiple ring pointers.
+Flow and Result Terminology: Instead of using the clunky SQE (Submission Queue Entry) and CQE (Completion Queue Entry), operations are abstracted into Flow (for submission) and Result (for completion).
+Memory-Safe Core: Written in Rust to eliminate buffer overflows and use-after-free bugs at the compiler level.
+Buffer Leasing: Instead of passing raw pointers, the app registers memory regions. The framework enforces a "Lease" system. If an application attempts to free or modify a buffer while it is in-flight, it triggers a Torus Panic—a highly descriptive, safe user-space abort that prevents kernel corruption.
+Layer 4: Hardware Bypass (The Turbo)
+For ultra-low latency requirements where even the kernel is too slow:
+User-Space I/O (USO) Integration: Hooks into SPDK (Storage) and DPDK (Networking) to bypass the OS kernel entirely.
+GPU-Direct Orchestration: Provides APIs to orchestrate DMA (Direct Memory Access) transfers directly from NVMe drives to GPU VRAM, bypassing system RAM.
+4. Key Design Principles
+Progressive Disclosure of Complexity: 90% of users should be able to use the high-level async/await API. The remaining 10% can drop down to the raw Virtual Torus API to manually batch and link operations.
+Fail-Safe Defaults: Security features (like buffer registration and strict sandboxing) are enabled by default. Users must explicitly opt-out to use raw, unsafe pointers.
+Zero-Cost Abstraction: The cross-platform emulation layer must compile down to the exact same machine code as native calls. There should be no measurable overhead for using the unified API on Linux.
+5. Threat Model & Security Mitigations
+Given the history of io_uring vulnerabilities, security is a primary design constraint.
+Threat: User-space application passes a freed or invalid pointer to the kernel via the SQ, leading to kernel panic or privilege escalation.
+Mitigation: The Torus Panic and Buffer Leasing system. Memory passed to the I/O engine is locked and tracked in user-space. The kernel never sees an invalid pointer because the framework catches the violation before the syscall.
+Threat: Malicious container exhausts kernel resources via io_uring.
+Mitigation: TPT Torus includes built-in cgroup-aware resource limiting, automatically capping the size of the SQ/CQ and the number of in-flight requests based on container quotas.
+6. Project Structure & Ecosystem
+TPT Torus is organized as a modular monorepo to allow developers to pull in only the components they need.
+Core Repositories:
+tpt-torus (The main meta-repo / landing page)
+torus-core (The Virtual Torus abstraction, Safe API, and Torus handle)
+torus-sys (The raw, unsafe FFI bindings to io_uring, IOCP, and kqueue)
+Backend Repositories:
+torus-backend-uring (Linux specific optimizations)
+torus-backend-iocp (Windows specific optimizations)
+torus-backend-kqueue (macOS/BSD specific optimizations)
+Language Bindings:
+torus-rs (Rust native bindings)
+torus-go (Go bindings)
+torus-py (Python bindings via PyO3/CFFI)
+7. Roadmap
+Phase 1 (Months 1-3): Implement the Virtual Torus abstraction and the Linux io_uring backend. Release alpha with basic file and socket I/O using the Flow/Result API.
+Phase 2 (Months 4-6): Implement Windows (IOCP) and macOS (kqueue) backends. Achieve feature parity across all three OSes.
+Phase 3 (Months 7-9): Implement the Safe API (Buffer Leasing, Torus Panic) and high-level async/await wrappers for Rust and C++.
+Phase 4 (Months 10-12): Integrate Hardware Bypass (SPDK/DPDK) and GPU-Direct storage orchestration.s

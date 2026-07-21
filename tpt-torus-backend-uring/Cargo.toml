@@ -1,0 +1,16 @@
+[package]
+name = "tpt-torus-backend-uring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Linux io_uring backend engine for TPT Torus."
+
+[lib]
+name = "tpt_torus_backend_uring"
+path = "src/lib.rs"
+
+[dependencies]
+tpt-torus-sys = { path = "../tpt-torus-sys" }
+tpt-torus-core = { path = "../tpt-torus-core" }
+libc = "0.2"
