@@ -4,13 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Linux io_uring backend engine for TPT Torus."
+readme = "README.md"
+keywords = ["io_uring", "linux", "async-io"]
+categories = ["asynchronous", "os::linux-apis"]
 
 [lib]
 name = "tpt_torus_backend_uring"
 path = "src/lib.rs"
 
 [dependencies]
-tpt-torus-sys = { path = "../tpt-torus-sys" }
-tpt-torus-core = { path = "../tpt-torus-core" }
+tpt-torus-sys = { path = "../tpt-torus-sys", version = "0.1.0" }
+tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
 libc = "0.2"

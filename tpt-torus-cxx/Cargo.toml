@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "C-compatible FFI and C++20 coroutine wrapper for TPT Torus."
+readme = "README.md"
+keywords = ["ffi", "cxx", "coroutines", "async-io"]
+categories = ["api-bindings", "asynchronous"]
 
 [lib]
 name = "tpt_torus_cxx"
@@ -12,7 +16,7 @@ path = "src/lib.rs"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-tpt-torus-core = { path = "../tpt-torus-core" }
+tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
 libc = "0.2"
 
 [features]

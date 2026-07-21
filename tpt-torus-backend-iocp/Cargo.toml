@@ -4,15 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Windows IOCP backend engine for TPT Torus."
+readme = "README.md"
+keywords = ["iocp", "windows", "async-io"]
+categories = ["asynchronous", "os::windows-apis"]
 
 [lib]
 name = "tpt_torus_backend_iocp"
 path = "src/lib.rs"
 
 [dependencies]
-tpt-torus-sys = { path = "../tpt-torus-sys" }
-tpt-torus-core = { path = "../tpt-torus-core" }
+tpt-torus-sys = { path = "../tpt-torus-sys", version = "0.1.0" }
+tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

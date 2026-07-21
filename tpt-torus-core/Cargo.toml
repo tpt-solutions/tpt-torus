@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "The Virtual Torus abstraction, Safe API, and Torus handle."
+readme = "README.md"
+keywords = ["async-io", "io_uring", "iocp", "kqueue", "io"]
+categories = ["asynchronous", "os"]
 
 [lib]
 name = "tpt_torus_core"

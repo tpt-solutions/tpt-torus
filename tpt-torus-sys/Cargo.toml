@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Raw, unsafe FFI bindings to io_uring, IOCP, and kqueue for TPT Torus."
+readme = "README.md"
+keywords = ["io_uring", "iocp", "kqueue", "ffi", "async-io"]
+categories = ["api-bindings", "os"]
 
 [lib]
 name = "tpt_torus_sys"

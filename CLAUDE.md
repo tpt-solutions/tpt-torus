@@ -45,3 +45,13 @@ Backend crates are platform-gated at the crate root (`#![cfg(target_os = "linux"
 - `Operation` variants carry raw pointers (`*mut u8`, `*const libc::sockaddr`) directly — this is intentional (it mirrors the zero-copy submission path to the kernel), but it means any *safe* buffer-safety guarantee must come from the caller going through `LeaseRegistry`, not from the `Operation`/`Flow` types themselves.
 - Every backend's `Backend` impl must be `Send + Sync` (`Torus` requires this to be shared via `Arc`) — the existing backends do this via explicit `unsafe impl` plus wrapper types for raw handles (e.g. `SafeHandle` in the IOCP backend) rather than relying on the raw handle being `Send`/`Sync` itself.
 - `torus-sys`'s struct layouts must match the kernel/OS ABI byte-for-byte; if you change one, check it against the actual kernel headers, not just internal consistency.
+
+## Publishing to crates.io
+
+Every inter-crate dependency is `{ path = "...", version = "0.1.0" }`. This is required for `cargo publish` to work at all, but it also means `cargo package`/`cargo publish` resolve the *version* requirement against the live crates.io index even for a purely local dry run — a crate depending on an unpublished sibling will fail to package with "no matching package named `X` found" until that sibling is actually live. Practically: verify leaf crates first (`tpt-torus-sys`, `tpt-torus-core` have no unpublished deps and can be packaged/verified locally at any time), then publish in strict dependency order and expect downstream crates to be unverifiable locally until their deps are published:
+
+```
+tpt-torus-sys → tpt-torus-core → {tpt-torus-backend-uring, tpt-torus-backend-iocp, tpt-torus-backend-kqueue, tpt-torus-cxx, tpt-torus-hw}
+```
+
+Bump `workspace.package.version` in the root `Cargo.toml` for releases — it's inherited by every crate via `version.workspace = true`, so all crates version together.

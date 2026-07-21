@@ -51,10 +51,11 @@ impl LeaseRegistry {
     /// - The region will not be freed while registered
     pub unsafe fn register(&self, ptr: *const u8, len: usize) -> Result<(), LeaseError> {
         let start = ptr as usize;
-        let regions = self.regions.read().unwrap();
+        let mut regions = self.regions.write().unwrap();
 
-        // Check for overlapping regions
-        if let Some((_addr, existing)) = regions.range(..start + len).next_back() {
+        // Check for overlapping regions under the same write lock to prevent TOCTOU race
+        let end = start.saturating_add(len);
+        if let Some((_addr, existing)) = regions.range(..end).next_back() {
             if existing.start + existing.len > start {
                 return Err(LeaseError::Overlap {
                     existing_start: existing.start,
@@ -63,9 +64,6 @@ impl LeaseRegistry {
             }
         }
 
-        drop(regions);
-
-        let mut regions = self.regions.write().unwrap();
         regions.insert(
             start,
             LeaseRegion {
