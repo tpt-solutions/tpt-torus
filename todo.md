@@ -103,8 +103,8 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
   5. `cargo publish -p tpt-torus-backend-kqueue`
   6. `cargo publish -p tpt-torus-cxx`
   7. `cargo publish -p tpt-torus-hw`
-- [ ] Commit the real `Cargo.lock` (currently gitignored) or decide to keep ignoring it for these library crates
-- [ ] Decide whether to publish `tpt-torus-backend-uring`/`-iocp`/`-kqueue` now even though their content is `#![cfg(...)]`-gated to a single OS each (they'll build as empty crates on other platforms, which is fine, but worth a conscious decision)
+- [x] Commit the real `Cargo.lock` (currently gitignored) or decide to keep ignoring it for these library crates
+- [x] Decide whether to publish `tpt-torus-backend-uring`/`-iocp`/`-kqueue` now even though their content is `#![cfg(...)]`-gated to a single OS each (they'll build as empty crates on other platforms, which is fine, but worth a conscious decision)
 - [ ] After first publish, verify `cargo add tpt-torus-core` from a scratch project pulls in the expected dependency tree
 
 ## Platform Review Follow-ups (2026-07-22)
@@ -118,7 +118,7 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 - [ ] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (currently always returns `HwError::NotAvailable`, `dpdk.rs:102,191,199,207,263,270`)
 - [x] Run `tpt-torus-hw` hardware-bypass tests in default CI, or clearly document that `gpu_direct`/`spdk`/`dpdk` features are opt-in and untested by default
 - [x] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); code-level TODO/tracking note added in the meantime (`async_api.rs` module doc, see below) — actual waker-registration fix still open
-- [ ] Implement `Operation::Accept`/`Operation::Connect` in `tpt-torus-backend-iocp` via `AcceptEx`/`ConnectEx` instead of returning ENOSYS (`tpt-torus-backend-iocp/src/lib.rs:365-382`)
+- [x] Implement `Operation::Accept`/`Operation::Connect` in `tpt-torus-backend-iocp` via `AcceptEx`/`ConnectEx` instead of returning ENOSYS (`tpt-torus-backend-iocp/src/lib.rs:365-382`)
 - [x] Fix TOCTOU race in `LeaseRegistry::register` — check-then-insert must happen under a single write lock, not read-then-write (`tpt-torus-core/src/lease.rs:52-78`)
 - [x] Add a concurrent/multithreaded test for `LeaseRegistry::register` to cover the race above
 - [x] Harden `lease.rs` range/counter edge cases: `regions.range(..addr + 1)` overflow at `addr == usize::MAX`, `in_flight: u32` unchecked increment (use `saturating_add`)
@@ -128,12 +128,12 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 
 ### Missing features vs. spec.txt
 
-- [ ] Real tokio/async-std executor interop layer built on `async_api.rs` (replaces busy-poll futures above)
+- [x] Real tokio/async-std executor interop layer built on `async_api.rs` (replaces busy-poll futures above)
 - [ ] `torus-go` / `torus-py` language bindings (tracked under Later/Stretch above, calling out explicitly here as review follow-up)
 
 ### Innovation / architecture
 
-- [ ] Shard the `Torus`/`Backend` lock — replace the single global `Mutex<Box<dyn Backend>>` (`backend.rs:9-27`, `lib.rs:34-92`) with per-core `Torus` instances or lock-free SQ/CQ to avoid serializing all I/O across threads
+- [x] Shard the `Torus`/`Backend` lock — replace the single global `Mutex<Box<dyn Backend>>` (`backend.rs:9-27`, `lib.rs:34-92`) with per-core `Torus` instances or lock-free SQ/CQ to avoid serializing all I/O across threads
 - [ ] Wire io_uring registered buffers/files (`IORING_REGISTER_BUFFERS`) into `LeaseRegistry` for zero-copy fixed-buffer I/O
 - [ ] Add multi-shot accept/recv and SQPOLL mode support to `tpt-torus-backend-uring`
 - [x] Add a uniform batched/vectored submit API (`submitv`) across all three backends

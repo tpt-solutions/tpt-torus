@@ -25,6 +25,7 @@ pub use rings::{CompletionRing, SubmissionRing};
 pub use torus_panic::TorusPanic;
 
 use backend::Backend;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The main context object for the Virtual Torus.
@@ -161,3 +162,101 @@ impl Torus {
 
 /// Shared handle to a `Torus` instance, suitable for multi-threaded use.
 pub type SharedTorus = Arc<Torus>;
+
+/// A pool of `Torus` instances that distributes I/O across multiple backends.
+///
+/// `TorusPool` avoids serializing all I/O through a single `Mutex<dyn Backend>`
+/// by maintaining N independent `Torus` instances and distributing operations
+/// across them via round-robin. Each `Torus` in the pool has its own backend
+/// and ring pair, so submissions on different pool entries are fully concurrent.
+///
+/// # Example
+///
+/// ```ignore
+/// use tpt_torus_core::TorusPool;
+///
+/// // Create a pool with 4 Torus instances (one per core)
+/// let pool = TorusPool::new(4, 256, |ring_entries| {
+///     Box::new(UringBackend::new(ring_entries)?)
+/// })?;
+///
+/// // Submit operations — distributed across pool members
+/// pool.submit(&flow)?;
+/// ```
+pub struct TorusPool {
+    instances: Vec<Arc<Torus>>,
+    next: AtomicU32,
+}
+
+impl TorusPool {
+    /// Create a new pool with `count` Torus instances.
+    ///
+    /// Each instance gets `ring_entries` SQ/CQ entries. The `make_backend`
+    /// closure is called once per instance to create the platform-specific backend.
+    pub fn new<F>(
+        count: usize,
+        ring_entries: u32,
+        make_backend: F,
+    ) -> Result<Self>
+    where
+        F: Fn(u32) -> Result<Box<dyn Backend>>,
+    {
+        if count == 0 {
+            return Err(Error::InvalidParam("pool count must be > 0"));
+        }
+        let mut instances = Vec::with_capacity(count);
+        for _ in 0..count {
+            let backend = make_backend(ring_entries)?;
+            instances.push(Arc::new(Torus::new(ring_entries, backend)?));
+        }
+        Ok(Self {
+            instances,
+            next: AtomicU32::new(0),
+        })
+    }
+
+    /// Submit a flow to the next available Torus instance (round-robin).
+    pub fn submit(&self, flow: &Flow) -> Result<()> {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) as usize % self.instances.len();
+        self.instances[idx].submit(flow)
+    }
+
+    /// Submit a batch of flows, distributing them across pool instances.
+    pub fn submit_batch(&self, flows: &[Flow]) -> Result<usize> {
+        let mut total = 0;
+        for flow in flows {
+            self.submit(flow)?;
+            total += 1;
+        }
+        Ok(total)
+    }
+
+    /// Reap completions from all pool instances.
+    pub fn reap(&self, results: &mut Vec<TorusResult>) -> Result<usize> {
+        let mut total = 0;
+        for instance in &self.instances {
+            total += instance.reap(results)?;
+        }
+        Ok(total)
+    }
+
+    /// The number of Torus instances in this pool.
+    pub fn len(&self) -> usize {
+        self.instances.len()
+    }
+
+    /// Whether the pool is empty.
+    pub fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
+
+    /// Get a reference to a specific pool instance.
+    pub fn get(&self, index: usize) -> Option<&Torus> {
+        self.instances.get(index).map(|arc| arc.as_ref())
+    }
+
+    /// Total in-flight operations across all pool instances.
+    pub fn in_flight(&self) -> u32 {
+        self.instances.iter().map(|i| i.in_flight()).sum()
+    }
+}
