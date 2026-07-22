@@ -20,6 +20,7 @@ tpt-torus-sys = { path = "../tpt-torus-sys", version = "0.1.0" }
 tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
 
 [target.'cfg(windows)'.dependencies]
+libc = "0.2"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_IO",

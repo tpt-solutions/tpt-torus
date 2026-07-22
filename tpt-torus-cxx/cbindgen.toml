@@ -1,0 +1,25 @@
+language = "C"
+
+[defines]
+"cfg(target_os = "linux")" = "TORUS_LINUX"
+"cfg(target_os = "windows")" = "TORUS_WINDOWS"
+"cfg(target_os = "macos")" = "TORUS_MACOS"
+
+[export]
+include = ["TorusHandle", "CompletionCallback", "TorusOperation", "TorusCompletion"]
+exclude = []
+
+[export.rename]
+"TorusHandle" = "torus_handle_t"
+"CompletionCallback" = "torus_completion_cb"
+"TorusOperation" = "torus_operation_t"
+"TorusCompletion" = "torus_completion_t"
+
+[fn]
+sort_by = "None"
+
+[struct]
+rename_fields = "None"
+
+[enum]
+rename_variants = "None"

@@ -16,9 +16,19 @@ name = "tpt_torus_cxx"
 path = "src/lib.rs"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[[bin]]
+name = "generate-header"
+path = "src/bin/generate_header.rs"
+required-features = ["generate-header"]
+
 [dependencies]
 tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
 libc = "0.2"
 
+[dependencies.cbindgen]
+version = "0.27"
+optional = true
+
 [features]
 default = []
+generate-header = ["cbindgen"]

@@ -16,18 +16,20 @@ For ultra-low latency requirements, TPT Torus also provides a **Hardware Bypass*
 
 ## Quick Start
 
-```rust
-use tpt_torus_core::async_api::TorusAsync;
+```rust,ignore
 use tpt_torus_core::flow::Flow;
 use tpt_torus_core::operation::Operation;
+use tpt_torus_core::Torus;
+use tpt_torus_backend_uring::UringBackend;
 
-// Create a Torus instance (platform-specific backend)
-let torus = Torus::new(256, Box::new(UringBackend::new(256)?))?;
+// Create a Torus instance with an io_uring backend (Linux)
+let backend = UringBackend::new(256)?;
+let torus = Torus::new(256, Box::new(backend))?;
 
 // Submit a read operation
 let mut buf = vec![0u8; 4096];
 let flow = Flow::new(Operation::Read {
-    fd: file_fd,
+    fd: file_fd,       // raw fd from open() or AsRawFd
     buf: buf.as_mut_ptr(),
     len: 4096,
     offset: 0,
@@ -78,7 +80,7 @@ torus.reap(&mut results)?;
 
 Write once, run everywhere. The same `Flow`/`Result` API works on all platforms:
 
-```rust
+```rust,ignore
 // This code works on Linux, Windows, and macOS
 let flow = Flow::new(Operation::Read { fd, buf, len, offset });
 torus.submit(&flow)?;
@@ -88,14 +90,14 @@ torus.submit(&flow)?;
 
 Memory safety is enforced at the framework level:
 
-```rust
+```rust,ignore
 use tpt_torus_core::lease::LeaseRegistry;
 
 let registry = LeaseRegistry::new();
 unsafe {
     // Register buffer regions
     registry.register_mut(buf.as_mut_ptr(), buf.len())?;
-    
+
     // Buffers are automatically tracked during I/O
     // Torus Panic triggers if safety is violated
 }
@@ -105,7 +107,7 @@ unsafe {
 
 For advanced use cases, bypass safety checks explicitly:
 
-```rust
+```rust,ignore
 unsafe {
     let raw = torus.raw();
     raw.submit_read(fd, buf_ptr, len, offset)?;
@@ -130,7 +132,7 @@ if (result.ok()) {
 
 Direct hardware access for ultra-low latency:
 
-```rust
+```rust,ignore
 use tpt_torus_hw::gpu_direct::GpuDirect;
 
 let mut gd = GpuDirect::new(0, 4)?; // GPU device 0, 4 DMA engines

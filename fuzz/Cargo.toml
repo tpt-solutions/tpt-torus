@@ -1,0 +1,33 @@
+[package]
+name = "tpt-torus-fuzz"
+version = "0.0.0"
+authors = ["TPT Torus contributors"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.tpt-torus-core]
+path = "../tpt-torus-core"
+
+[[bin]]
+name = "fuzz_flow creation"
+path = "fuzz_targets/flow_creation.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_result parsing"
+path = "fuzz_targets/result_parsing.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_operation validate"
+path = "fuzz_targets/operation_validate.rs"
+test = false
+doc = false

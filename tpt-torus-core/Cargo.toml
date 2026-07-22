@@ -17,9 +17,17 @@ path = "src/lib.rs"
 
 [dependencies]
 libc = "0.2"
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+tpt-torus-backend-uring = { path = "../tpt-torus-backend-uring", version = "0.1.0" }
+tpt-torus-backend-iocp = { path = "../tpt-torus-backend-iocp", version = "0.1.0" }
+tpt-torus-backend-kqueue = { path = "../tpt-torus-backend-kqueue", version = "0.1.0" }
+
+[features]
+default = []
+tracing = ["dep:tracing"]
 
 [[bench]]
 name = "torus_bench"

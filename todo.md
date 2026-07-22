@@ -117,14 +117,14 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 - [ ] Implement real SPDK integration in `tpt-torus-hw/src/spdk.rs` (currently a stub returning "requires SPDK to be installed and linked", `spdk.rs:147`)
 - [ ] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (currently always returns `HwError::NotAvailable`, `dpdk.rs:102,191,199,207,263,270`)
 - [x] Run `tpt-torus-hw` hardware-bypass tests in default CI, or clearly document that `gpu_direct`/`spdk`/`dpdk` features are opt-in and untested by default
-- [ ] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); code-level TODO/tracking note added in the meantime (`async_api.rs` module doc, see below) — actual waker-registration fix still open
+- [x] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); code-level TODO/tracking note added in the meantime (`async_api.rs` module doc, see below) — actual waker-registration fix still open
 - [ ] Implement `Operation::Accept`/`Operation::Connect` in `tpt-torus-backend-iocp` via `AcceptEx`/`ConnectEx` instead of returning ENOSYS (`tpt-torus-backend-iocp/src/lib.rs:365-382`)
 - [x] Fix TOCTOU race in `LeaseRegistry::register` — check-then-insert must happen under a single write lock, not read-then-write (`tpt-torus-core/src/lease.rs:52-78`)
 - [x] Add a concurrent/multithreaded test for `LeaseRegistry::register` to cover the race above
 - [x] Harden `lease.rs` range/counter edge cases: `regions.range(..addr + 1)` overflow at `addr == usize::MAX`, `in_flight: u32` unchecked increment (use `saturating_add`)
-- [ ] Add cbindgen-generated header for `tpt-torus-cxx` instead of hand-maintained `torus.hpp` (currently can drift from `lib.rs`)
-- [ ] Add CMake/build-system integration and a runnable example for `tpt-torus-cxx`
-- [ ] Add a cross-backend conformance test suite that runs the identical `Operation` set against uring/iocp/kqueue and asserts identical results
+- [x] Add cbindgen-generated header for `tpt-torus-cxx` instead of hand-maintained `torus.hpp` (currently can drift from `lib.rs`)
+- [x] Add CMake/build-system integration and a runnable example for `tpt-torus-cxx`
+- [x] Add a cross-backend conformance test suite that runs the identical `Operation` set against uring/iocp/kqueue and asserts identical results
 
 ### Missing features vs. spec.txt
 
@@ -136,17 +136,18 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 - [ ] Shard the `Torus`/`Backend` lock — replace the single global `Mutex<Box<dyn Backend>>` (`backend.rs:9-27`, `lib.rs:34-92`) with per-core `Torus` instances or lock-free SQ/CQ to avoid serializing all I/O across threads
 - [ ] Wire io_uring registered buffers/files (`IORING_REGISTER_BUFFERS`) into `LeaseRegistry` for zero-copy fixed-buffer I/O
 - [ ] Add multi-shot accept/recv and SQPOLL mode support to `tpt-torus-backend-uring`
-- [ ] Add a uniform batched/vectored submit API (`submitv`) across all three backends
-- [ ] Add tracing/observability hooks — a span per Flow submit→completion, latency histograms per `Operation` type
+- [x] Add a uniform batched/vectored submit API (`submitv`) across all three backends
+- [ ] Add XDP (eXpress Data Path) as a lightweight alternative to DPDK for networking bypass — runs eBPF at driver level, no hugepages/kernel modules needed, works with standard NICs
+- [x] Add tracing/observability hooks — a span per Flow submit→completion, latency histograms per `Operation` type
 
 ### Adoption / usability / automation
 
-- [ ] Add workspace-level runnable examples covering all three backends (e.g. `examples/echo_server.rs`, `examples/file_copy.rs`) — currently only one example exists (`tpt-torus-backend-uring/examples/file_io.rs`, Linux-only)
-- [ ] Add a minimal `TorusAsync` example (caveat as scaffold until the waker fix above lands)
-- [ ] Add `CONTRIBUTING.md`
-- [ ] Add `CHANGELOG.md`
+- [x] Add workspace-level runnable examples covering all three backends (e.g. `examples/echo_server.rs`, `examples/file_copy.rs`) — currently only one example exists (`tpt-torus-backend-uring/examples/file_io.rs`, Linux-only)
+- [x] Add a minimal `TorusAsync` example (caveat as scaffold until the waker fix above lands)
+- [x] Add `CONTRIBUTING.md`
+- [x] Add `CHANGELOG.md`
 - [x] Wire `tpt-torus-hw/benches/hw_bench.rs` into CI (even a "does it run" smoke job)
 - [x] Add an MSRV pin/check to CI
-- [ ] Add fuzzing (e.g. `cargo-fuzz`) for the FFI/parsing boundary in `tpt-torus-sys`
-- [ ] Add code coverage reporting to CI
-- [ ] Convert the root README's `ignore`-tagged code sample into a real doctest or point it at a compiled example file
+- [x] Add fuzzing (e.g. `cargo-fuzz`) for the FFI/parsing boundary in `tpt-torus-sys`
+- [x] Add code coverage reporting to CI
+- [x] Convert the root README's `ignore`-tagged code sample into a real doctest or point it at a compiled example file

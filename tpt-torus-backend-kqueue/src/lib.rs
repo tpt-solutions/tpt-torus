@@ -359,6 +359,63 @@ impl Backend for KqueueBackend {
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     submitted += 1;
                 }
+                Operation::Readv {
+                    fd,
+                    bufs,
+                    buf_count,
+                    offset,
+                } => {
+                    // Vectored read: use preadv for file I/O (kqueue doesn't support async file I/O)
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+
+                    // Convert to iovec for preadv
+                    let iovecs: Vec<libc::iovec> = bufs_slice
+                        .iter()
+                        .map(|b| libc::iovec {
+                            iov_base: b.buf as *mut libc::c_void,
+                            iov_len: b.len,
+                        })
+                        .collect();
+
+                    let result = unsafe {
+                        libc::preadv(fd, iovecs.as_ptr(), iovecs.len() as i32, *offset as libc::off_t)
+                    };
+
+                    self.register_read(fd, user_data);
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
+                Operation::Writev {
+                    fd,
+                    bufs,
+                    buf_count,
+                    offset,
+                } => {
+                    // Vectored write: use pwritev for file I/O
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+
+                    let iovecs: Vec<libc::iovec> = bufs_slice
+                        .iter()
+                        .map(|b| libc::iovec {
+                            iov_base: b.buf as *mut libc::c_void,
+                            iov_len: b.len,
+                        })
+                        .collect();
+
+                    let result = unsafe {
+                        libc::pwritev(fd, iovecs.as_ptr(), iovecs.len() as i32, *offset as libc::off_t)
+                    };
+
+                    self.register_write(fd, user_data);
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
             }
         }
 

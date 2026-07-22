@@ -2,7 +2,7 @@
 //!
 //! Run with: `cargo bench -p tpt-torus-hw --features gpu_direct`
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, Criterion};
 
 /// Benchmark: NVMe command builder overhead.
 fn bench_nvme_cmd(c: &mut Criterion) {
@@ -74,6 +74,7 @@ fn bench_dma_pool(c: &mut Criterion) {
 }
 
 /// Benchmark: GPU-Direct buffer and entry creation.
+#[cfg(feature = "gpu_direct")]
 fn bench_gpu_direct(c: &mut Criterion) {
     use tpt_torus_hw::gpu_direct::{DmaEntry, GpuBuffer, TransferDirection};
 
@@ -107,6 +108,7 @@ fn bench_gpu_direct(c: &mut Criterion) {
 }
 
 /// Benchmark: TransferDirection display formatting.
+#[cfg(feature = "gpu_direct")]
 fn bench_transfer_direction(c: &mut Criterion) {
     use tpt_torus_hw::gpu_direct::TransferDirection;
 
@@ -276,9 +278,14 @@ criterion_group!(
     benches,
     bench_nvme_cmd,
     bench_dma_pool,
+    bench_allocation_overhead,
+);
+
+#[cfg(feature = "gpu_direct")]
+criterion_group!(
+    gpu_benches,
     bench_gpu_direct,
     bench_transfer_direction,
-    bench_allocation_overhead,
 );
 
 #[cfg(unix)]
@@ -289,6 +296,8 @@ criterion_group!(
 
 fn main() {
     benches();
+    #[cfg(feature = "gpu_direct")]
+    gpu_benches();
     #[cfg(unix)]
     unix_benches();
 }

@@ -30,7 +30,7 @@
 //! ```
 
 use crate::flow::Flow;
-use crate::operation::Operation;
+use crate::operation::{IoSlice, Operation};
 use crate::result::Result as TorusResult;
 use crate::Torus;
 
@@ -98,6 +98,50 @@ impl<'a> RawTorus<'a> {
             fd,
             buf,
             len,
+            offset,
+        });
+        self.torus.submit(&flow)
+    }
+
+    /// Submit a raw vectored read (readv) without buffer registration.
+    ///
+    /// # Safety
+    ///
+    /// - Every buffer in `bufs` must point to valid, live memory
+    /// - Buffers must not be freed or modified until the operation completes
+    /// - `fd` must be a valid file descriptor
+    pub unsafe fn submit_readv(
+        &self,
+        fd: i32,
+        bufs: &[IoSlice],
+        offset: u64,
+    ) -> crate::Result<()> {
+        let flow = Flow::new(Operation::Readv {
+            fd,
+            bufs: bufs.as_ptr(),
+            buf_count: bufs.len() as u32,
+            offset,
+        });
+        self.torus.submit(&flow)
+    }
+
+    /// Submit a raw vectored write (writev) without buffer registration.
+    ///
+    /// # Safety
+    ///
+    /// - Every buffer in `bufs` must point to valid, live memory
+    /// - Buffers must not be freed until the operation completes
+    /// - `fd` must be a valid file descriptor
+    pub unsafe fn submit_writev(
+        &self,
+        fd: i32,
+        bufs: &[IoSlice],
+        offset: u64,
+    ) -> crate::Result<()> {
+        let flow = Flow::new(Operation::Writev {
+            fd,
+            bufs: bufs.as_ptr(),
+            buf_count: bufs.len() as u32,
             offset,
         });
         self.torus.submit(&flow)

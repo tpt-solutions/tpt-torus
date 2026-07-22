@@ -1,3 +1,12 @@
+/// A single buffer descriptor for vectored I/O (scatter-gather).
+#[derive(Debug, Clone, Copy)]
+pub struct IoSlice {
+    /// Pointer to the buffer.
+    pub buf: *mut u8,
+    /// Length of the buffer in bytes.
+    pub len: usize,
+}
+
 /// I/O operations that can be submitted to the Virtual Torus.
 ///
 /// Each variant maps to a native operation on the underlying backend
@@ -16,6 +25,30 @@ pub enum Operation {
         fd: i32,
         buf: *const u8,
         len: usize,
+        offset: u64,
+    },
+    /// Vectored read (readv) — read from a file descriptor into multiple buffers.
+    ///
+    /// Maps to `IORING_OP_READV` on Linux, overlapped read on Windows,
+    /// and multiple `EVFILT_READ` events on kqueue.
+    Readv {
+        fd: i32,
+        /// Scatter list: each entry is a buffer to read into.
+        bufs: *const IoSlice,
+        /// Number of entries in `bufs`.
+        buf_count: u32,
+        offset: u64,
+    },
+    /// Vectored write (writev) — write multiple buffers to a file descriptor.
+    ///
+    /// Maps to `IORING_OP_WRITEV` on Linux, overlapped write on Windows,
+    /// and multiple `EVFILT_WRITE` events on kqueue.
+    Writev {
+        fd: i32,
+        /// Gather list: each entry is a buffer to write from.
+        bufs: *const IoSlice,
+        /// Number of entries in `bufs`.
+        buf_count: u32,
         offset: u64,
     },
     /// Accept an incoming connection on a listening socket.

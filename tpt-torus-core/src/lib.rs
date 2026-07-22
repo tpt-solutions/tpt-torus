@@ -9,6 +9,7 @@ pub mod cgroup;
 pub mod error;
 pub mod flow;
 pub mod lease;
+pub mod observability;
 pub mod operation;
 pub mod raw_api;
 pub mod result;
@@ -18,7 +19,7 @@ pub mod torus_panic;
 pub use error::{Error, Result};
 pub use flow::Flow;
 pub use lease::{LeaseError, LeaseRegistry, SharedLeaseRegistry};
-pub use operation::Operation;
+pub use operation::{IoSlice, Operation};
 pub use result::Result as TorusResult;
 pub use rings::{CompletionRing, SubmissionRing};
 pub use torus_panic::TorusPanic;
@@ -74,6 +75,52 @@ impl Torus {
     /// Submit a batch of flows to the Virtual Torus.
     pub fn submit_batch(&self, flows: &[Flow]) -> Result<usize> {
         self.backend.lock().unwrap().submit(flows)
+    }
+
+    /// Submit a vectored read (readv) operation.
+    ///
+    /// Reads from `fd` at `offset` into multiple buffers described by `bufs`.
+    /// Returns the total number of bytes read across all buffers.
+    pub fn readv(
+        &self,
+        fd: i32,
+        bufs: &[IoSlice],
+        offset: u64,
+        user_data: u64,
+    ) -> Result<()> {
+        let flow = Flow::with_user_data(
+            Operation::Readv {
+                fd,
+                bufs: bufs.as_ptr(),
+                buf_count: bufs.len() as u32,
+                offset,
+            },
+            user_data,
+        );
+        self.submit(&flow)
+    }
+
+    /// Submit a vectored write (writev) operation.
+    ///
+    /// Writes to `fd` at `offset` from multiple buffers described by `bufs`.
+    /// Returns the total number of bytes written across all buffers.
+    pub fn writev(
+        &self,
+        fd: i32,
+        bufs: &[IoSlice],
+        offset: u64,
+        user_data: u64,
+    ) -> Result<()> {
+        let flow = Flow::with_user_data(
+            Operation::Writev {
+                fd,
+                bufs: bufs.as_ptr(),
+                buf_count: bufs.len() as u32,
+                offset,
+            },
+            user_data,
+        );
+        self.submit(&flow)
     }
 
     /// Reap all available completions.

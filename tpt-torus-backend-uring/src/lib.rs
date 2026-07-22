@@ -246,6 +246,99 @@ impl Backend for UringBackend {
                     sqe.opcode = opcodes::IORING_OP_CLOSE;
                     sqe.fd = *fd;
                 }
+                Operation::Readv {
+                    fd,
+                    bufs,
+                    buf_count,
+                    offset,
+                } => {
+                    // Vectored read: submit one SQE per buffer with sequential offsets.
+                    // This is the fallback; native IORING_OP_READV could be used with
+                    // proper iovec support in torus-sys.
+                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let mut current_offset = *offset;
+
+                    // Write the first buffer to the current SQE
+                    if let Some(first) = bufs_slice.first() {
+                        sqe.opcode = opcodes::IORING_OP_READ;
+                        sqe.fd = *fd;
+                        sqe.addr_splice_off_in = first.buf as u64;
+                        sqe.len = first.len as u32;
+                        sqe.off_addr2 = current_offset;
+                        sqe.user_data = flow.user_data();
+
+                        current_offset += first.len as u64;
+
+                        // Submit remaining buffers as additional SQEs
+                        for buf_desc in &bufs_slice[1..] {
+                            let next_tail = unsafe { (*self.sq_ring.tail).load(Ordering::Acquire) };
+                            let next_head = unsafe { (*self.sq_ring.head).load(Ordering::Acquire) };
+                            if (next_tail.wrapping_sub(next_head) & mask) >= entries {
+                                break;
+                            }
+                            let next_index = (next_tail & mask) as usize;
+                            let next_sqe = unsafe { &mut *self.sqe_array.add(next_index) };
+                            next_sqe.opcode = opcodes::IORING_OP_READ;
+                            next_sqe.fd = *fd;
+                            next_sqe.addr_splice_off_in = buf_desc.buf as u64;
+                            next_sqe.len = buf_desc.len as u32;
+                            next_sqe.off_addr2 = current_offset;
+                            next_sqe.user_data = flow.user_data();
+                            unsafe {
+                                (*self.sq_ring.tail).store(next_tail.wrapping_add(1), Ordering::Release);
+                            }
+                            submitted += 1;
+                            current_offset += buf_desc.len as u64;
+                        }
+                    } else {
+                        // Empty scatter list — still need to fill the SQE
+                        sqe.opcode = opcodes::IORING_OP_NOP;
+                    }
+                }
+                Operation::Writev {
+                    fd,
+                    bufs,
+                    buf_count,
+                    offset,
+                } => {
+                    // Vectored write: submit one SQE per buffer with sequential offsets.
+                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let mut current_offset = *offset;
+
+                    if let Some(first) = bufs_slice.first() {
+                        sqe.opcode = opcodes::IORING_OP_WRITE;
+                        sqe.fd = *fd;
+                        sqe.addr_splice_off_in = first.buf as u64;
+                        sqe.len = first.len as u32;
+                        sqe.off_addr2 = current_offset;
+                        sqe.user_data = flow.user_data();
+
+                        current_offset += first.len as u64;
+
+                        for buf_desc in &bufs_slice[1..] {
+                            let next_tail = unsafe { (*self.sq_ring.tail).load(Ordering::Acquire) };
+                            let next_head = unsafe { (*self.sq_ring.head).load(Ordering::Acquire) };
+                            if (next_tail.wrapping_sub(next_head) & mask) >= entries {
+                                break;
+                            }
+                            let next_index = (next_tail & mask) as usize;
+                            let next_sqe = unsafe { &mut *self.sqe_array.add(next_index) };
+                            next_sqe.opcode = opcodes::IORING_OP_WRITE;
+                            next_sqe.fd = *fd;
+                            next_sqe.addr_splice_off_in = buf_desc.buf as u64;
+                            next_sqe.len = buf_desc.len as u32;
+                            next_sqe.off_addr2 = current_offset;
+                            next_sqe.user_data = flow.user_data();
+                            unsafe {
+                                (*self.sq_ring.tail).store(next_tail.wrapping_add(1), Ordering::Release);
+                            }
+                            submitted += 1;
+                            current_offset += buf_desc.len as u64;
+                        }
+                    } else {
+                        sqe.opcode = opcodes::IORING_OP_NOP;
+                    }
+                }
             }
 
             sqe.user_data = flow.user_data();
