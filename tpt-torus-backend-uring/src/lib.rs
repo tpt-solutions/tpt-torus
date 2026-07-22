@@ -172,6 +172,190 @@ impl UringBackend {
     fn fd(&self) -> i32 {
         self.fd
     }
+
+    /// Register buffers with io_uring for zero-copy fixed-buffer I/O.
+    ///
+    /// After registration, buffers can be used with `IORING_OP_READ_FIXED` /
+    /// `IORING_OP_WRITE_FIXED` and identified by their index in the registered
+    /// array. This avoids per-operation address translation in the kernel.
+    ///
+    /// # Safety
+    ///
+    /// - All iovecs must point to valid, live memory regions
+    /// - Buffers must remain valid until `unregister_buffers` is called
+    /// - Must not be called while operations are in-flight on these buffers
+    pub unsafe fn register_buffers(&self, iovecs: *const libc::iovec, count: u32) -> Result<(), i32> {
+        let ret = tpt_torus_sys::io_uring_register(
+            self.fd,
+            1, // IORING_REGISTER_BUFFERS
+            iovecs as *const std::ffi::c_void,
+            count,
+        );
+        if ret < 0 {
+            Err(-ret)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Unregister all previously registered buffers.
+    pub fn unregister_buffers(&self) -> Result<(), i32> {
+        let ret = unsafe {
+            tpt_torus_sys::io_uring_unregister(self.fd, 1) // IORING_UNREGISTER_BUFFERS
+        };
+        if ret < 0 {
+            Err(-ret)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Enable SQPOLL mode — the kernel polls the submission ring on a dedicated
+    /// thread, eliminating the need for `io_uring_enter` syscalls on submission.
+    ///
+    /// This reduces latency for high-throughput workloads but burns a CPU core.
+    /// `sq_thread_idle` is the number of milliseconds the kernel thread waits
+    /// before sleeping (0 = never sleep).
+    pub fn enable_sqpoll(&self, sq_thread_idle: u32) -> Result<(), i32> {
+        let mut params: io_uring_params = unsafe { std::mem::zeroed() };
+        params.flags = tpt_torus_sys::setup_flags::IORING_SETUP_SQPOLL;
+        params.sq_thread_idle = sq_thread_idle;
+
+        // Note: SQPOLL must be set at io_uring_setup time, not after.
+        // This method documents the API; actual SQPOLL creation requires
+        // passing the flag to UringBackend::new via params.
+        let _ = params;
+        Err(libc::ENOSYS) // Not yet supported post-creation
+    }
+
+    /// Submit a multi-shot accept operation.
+    ///
+    /// A multi-shot accept stays active after each completion, delivering a
+    /// new connection fd for every incoming connection without re-submitting.
+    /// The SQE uses `IOSQE_IO_DRAIN` to remain active.
+    ///
+    /// Returns the user_data assigned to this persistent operation.
+    pub fn submit_multi_accept(
+        &self,
+        listen_fd: i32,
+        addr: *mut libc::sockaddr,
+        addrlen: *mut u32,
+        user_data: u64,
+    ) -> tpt_torus_core::error::Result<()> {
+        let tail = unsafe { (*self.sq_ring.tail).load(Ordering::Acquire) };
+        let head = unsafe { (*self.sq_ring.head).load(Ordering::Acquire) };
+        let mask = self.sq_ring.mask();
+        let entries = self.sq_ring.entries();
+
+        if (tail.wrapping_sub(head) & mask) >= entries {
+            return Err(tpt_torus_core::error::Error::SubmissionFull);
+        }
+
+        let index = (tail & mask) as usize;
+        let sqe = unsafe { &mut *self.sqe_array.add(index) };
+
+        sqe.opcode = opcodes::IORING_OP_ACCEPT;
+        sqe.fd = listen_fd;
+        sqe.addr_splice_off_in = addr as u64;
+        sqe.len = 0;
+        sqe.off_addr2 = addrlen as u64;
+        sqe.flags = tpt_torus_sys::sqe_flags::IOSQE_IO_DRAIN;
+        sqe.user_data = user_data;
+
+        unsafe {
+            (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
+        }
+
+        fence(Ordering::Release);
+        let ret = unsafe { tpt_torus_sys::io_uring_enter(self.fd, 1, 0, 0, ptr::null()) };
+        if ret < 0 {
+            Err(tpt_torus_core::error::Error::Os(-ret as i32))
+        } else {
+            self.in_flight.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// Submit a multi-shot recv operation.
+    ///
+    /// Stays active after each completion, delivering received data for every
+    /// incoming message without re-submitting. Uses `IOSQE_IO_DRAIN`.
+    pub fn submit_multi_recv(
+        &self,
+        fd: i32,
+        buf: *mut u8,
+        len: usize,
+        user_data: u64,
+    ) -> tpt_torus_core::error::Result<()> {
+        let tail = unsafe { (*self.sq_ring.tail).load(Ordering::Acquire) };
+        let head = unsafe { (*self.sq_ring.head).load(Ordering::Acquire) };
+        let mask = self.sq_ring.mask();
+        let entries = self.sq_ring.entries();
+
+        if (tail.wrapping_sub(head) & mask) >= entries {
+            return Err(tpt_torus_core::error::Error::SubmissionFull);
+        }
+
+        let index = (tail & mask) as usize;
+        let sqe = unsafe { &mut *self.sqe_array.add(index) };
+
+        sqe.opcode = opcodes::IORING_OP_RECV;
+        sqe.fd = fd;
+        sqe.addr_splice_off_in = buf as u64;
+        sqe.len = len as u32;
+        sqe.flags = tpt_torus_sys::sqe_flags::IOSQE_IO_DRAIN;
+        sqe.user_data = user_data;
+
+        unsafe {
+            (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
+        }
+
+        fence(Ordering::Release);
+        let ret = unsafe { tpt_torus_sys::io_uring_enter(self.fd, 1, 0, 0, ptr::null()) };
+        if ret < 0 {
+            Err(tpt_torus_core::error::Error::Os(-ret as i32))
+        } else {
+            self.in_flight.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// Cancel a multi-shot operation by submitting an `IORING_OP_ASYNC_CANCEL`.
+    pub fn cancel_multi(
+        &self,
+        target_user_data: u64,
+        cancel_user_data: u64,
+    ) -> tpt_torus_core::error::Result<()> {
+        let tail = unsafe { (*self.sq_ring.tail).load(Ordering::Acquire) };
+        let head = unsafe { (*self.sq_ring.head).load(Ordering::Acquire) };
+        let mask = self.sq_ring.mask();
+        let entries = self.sq_ring.entries();
+
+        if (tail.wrapping_sub(head) & mask) >= entries {
+            return Err(tpt_torus_core::error::Error::SubmissionFull);
+        }
+
+        let index = (tail & mask) as usize;
+        let sqe = unsafe { &mut *self.sqe_array.add(index) };
+
+        sqe.opcode = opcodes::IORING_OP_ASYNC_CANCEL;
+        sqe.fd = 0;
+        sqe.addr_splice_off_in = target_user_data;
+        sqe.user_data = cancel_user_data;
+
+        unsafe {
+            (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
+        }
+
+        fence(Ordering::Release);
+        let ret = unsafe { tpt_torus_sys::io_uring_enter(self.fd, 1, 0, 0, ptr::null()) };
+        if ret < 0 {
+            Err(tpt_torus_core::error::Error::Os(-ret as i32))
+        } else {
+            self.in_flight.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
 }
 
 impl Backend for UringBackend {

@@ -34,7 +34,7 @@
 use crate::backend::Backend;
 use crate::flow::Flow;
 use crate::operation::Operation;
-use crate::Torus;
+use crate::{Torus, TorusResult};
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -46,13 +46,18 @@ use std::time::Duration;
 
 // ─── Waker Registry ─────────────────────────────────────────────────────────
 
-/// Maps flow user_data values to task wakers.
+/// Maps flow user_data values to task wakers and delivered completions.
 ///
 /// When a future returns `Pending`, it registers its waker here keyed by the
-/// flow's `user_data`. The background reaper thread calls [`WakerRegistry::wake`]
-/// for each completed operation, causing the executor to re-poll the future.
+/// flow's `user_data`. The background reaper thread is the *only* caller of
+/// [`Torus::reap`] for a given `TorusAsync`; it dispatches each completion to
+/// the matching `user_data` slot via [`WakerRegistry::complete`] and wakes the
+/// waiting task. Futures never call `reap` themselves — doing so would let two
+/// callers race to drain the same completion queue and let one future steal a
+/// completion that belongs to another in-flight operation.
 struct WakerRegistry {
     wakers: Mutex<HashMap<u64, Waker>>,
+    results: Mutex<HashMap<u64, TorusResult>>,
     next_id: AtomicU64,
 }
 
@@ -60,6 +65,7 @@ impl WakerRegistry {
     fn new() -> Self {
         Self {
             wakers: Mutex::new(HashMap::new()),
+            results: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         }
     }
@@ -74,16 +80,24 @@ impl WakerRegistry {
         self.wakers.lock().unwrap().insert(user_data, waker);
     }
 
-    /// Wake and remove the task associated with this user_data.
-    fn wake(&self, user_data: u64) {
+    /// Store a completion and wake the task associated with this user_data, if any.
+    fn complete(&self, result: TorusResult) {
+        let user_data = result.user_data;
+        self.results.lock().unwrap().insert(user_data, result);
         if let Some(waker) = self.wakers.lock().unwrap().remove(&user_data) {
             waker.wake();
         }
     }
 
-    /// Remove a waker without waking it (used on successful completion).
+    /// Take the delivered completion for this user_data, if it has arrived.
+    fn take_result(&self, user_data: u64) -> Option<TorusResult> {
+        self.results.lock().unwrap().remove(&user_data)
+    }
+
+    /// Remove a waker and any pending result without waking it (used on drop/cancel).
     fn unregister(&self, user_data: u64) {
         self.wakers.lock().unwrap().remove(&user_data);
+        self.results.lock().unwrap().remove(&user_data);
     }
 }
 
@@ -122,8 +136,8 @@ impl TorusAsync {
                     results.clear();
                     match reaper_torus.reap(&mut results) {
                         Ok(count) if count > 0 => {
-                            for result in &results {
-                                reaper_registry.wake(result.user_data);
+                            for result in results.drain(..) {
+                                reaper_registry.complete(result);
                             }
                         }
                         _ => {
@@ -156,8 +170,8 @@ impl TorusAsync {
                     results.clear();
                     match reaper_torus.reap(&mut results) {
                         Ok(count) if count > 0 => {
-                            for result in &results {
-                                reaper_registry.wake(result.user_data);
+                            for result in results.drain(..) {
+                                reaper_registry.complete(result);
                             }
                         }
                         _ => {
@@ -345,20 +359,17 @@ impl<'a> Future for ReadFuture<'a> {
                 // Re-register waker in case we were woken but completion hasn't arrived yet
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(result.bytes().unwrap_or(0)))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(result.bytes().unwrap_or(0)))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),
@@ -419,20 +430,17 @@ impl<'a> Future for WriteFuture<'a> {
             FutureState::Waiting => {
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(result.bytes().unwrap_or(0)))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(result.bytes().unwrap_or(0)))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),
@@ -491,20 +499,17 @@ impl<'a> Future for RecvFuture<'a> {
             FutureState::Waiting => {
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(result.bytes().unwrap_or(0)))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(result.bytes().unwrap_or(0)))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),
@@ -563,20 +568,17 @@ impl<'a> Future for SendFuture<'a> {
             FutureState::Waiting => {
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(result.bytes().unwrap_or(0)))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(result.bytes().unwrap_or(0)))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),
@@ -636,20 +638,17 @@ impl<'a> Future for AcceptFuture<'a> {
             FutureState::Waiting => {
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(result.raw() as i32))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(result.raw() as i32))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),
@@ -709,20 +708,17 @@ impl<'a> Future for ConnectFuture<'a> {
             FutureState::Waiting => {
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(()))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(()))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),
@@ -774,20 +770,17 @@ impl<'a> Future for CloseFuture<'a> {
             FutureState::Waiting => {
                 this.registry.register(this.user_data, cx.waker().clone());
 
-                let mut results = Vec::new();
-                this.torus.reap(&mut results)?;
-
-                if results.is_empty() {
-                    Poll::Pending
-                } else {
-                    this.state = FutureState::Done;
-                    this.registry.unregister(this.user_data);
-                    let result = &results[0];
-                    if result.is_ok() {
-                        Poll::Ready(Ok(()))
-                    } else {
-                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                match this.registry.take_result(this.user_data) {
+                    Some(result) => {
+                        this.state = FutureState::Done;
+                        this.registry.unregister(this.user_data);
+                        if result.is_ok() {
+                            Poll::Ready(Ok(()))
+                        } else {
+                            Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                        }
                     }
+                    None => Poll::Pending,
                 }
             }
             FutureState::Done => panic!("poll after completion"),

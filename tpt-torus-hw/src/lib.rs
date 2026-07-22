@@ -38,6 +38,8 @@ pub mod gpu_direct;
 #[cfg(all(target_os = "linux", feature = "gpu_direct"))]
 pub mod nvme_gpu;
 pub mod spdk;
+#[cfg(feature = "xdp")]
+pub mod xdp;
 
 // Re-export key types
 pub use dpdk::{Mbuf, Mempool};

@@ -196,6 +196,7 @@ impl LeaseRegistry {
     ///
     /// The returned pointer is valid only while the read lock is held.
     /// Callers must use the pointer immediately and not store it.
+    #[cfg(unix)]
     pub fn as_iovec(&self) -> (*const libc::iovec, usize) {
         // This is a simplified version — in production you'd want to
         // return a guarded reference. For now, we collect into a Vec.

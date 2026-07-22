@@ -32,3 +32,4 @@ default = []
 spdk = []      # Enable SPDK integration (requires SPDK installed)
 dpdk = []      # Enable DPDK integration (requires DPDK installed)
 gpu_direct = ["libloading"] # Enable GPU-Direct orchestration (requires CUDA)
+xdp = []       # Enable XDP integration (Linux only, no external deps needed)
