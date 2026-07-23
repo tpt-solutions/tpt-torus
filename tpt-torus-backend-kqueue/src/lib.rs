@@ -39,7 +39,7 @@ const EVFILT_WRITE: i16 = -2;
 const KEVENT_ARRAY_SIZE: usize = 256;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct KEvent {
     ident: usize,
     filter: i16,
@@ -47,6 +47,19 @@ struct KEvent {
     fflags: u32,
     data: isize,
     udata: *mut std::ffi::c_void,
+}
+
+impl Default for KEvent {
+    fn default() -> Self {
+        KEvent {
+            ident: 0,
+            filter: 0,
+            flags: 0,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        }
+    }
 }
 
 extern "C" {
@@ -167,8 +180,7 @@ impl KqueueBackend {
 
             {
                 let mut cq = completions.lock().unwrap();
-                for i in 0..n as usize {
-                    let event = &events[i];
+                for event in events.iter().take(n as usize) {
                     let udata = event.udata as *const TorusResult;
                     if !udata.is_null() {
                         let result = unsafe { &*udata };
@@ -187,7 +199,7 @@ impl KqueueBackend {
 
     /// Register a file descriptor for read events.
     fn register_read(&self, fd: libc::c_int, user_data: u64) {
-        let mut event = KEvent {
+        let event = KEvent {
             ident: fd as usize,
             filter: EVFILT_READ,
             flags: EV_ADD | EV_ENABLE | EV_CLEAR,
@@ -202,7 +214,7 @@ impl KqueueBackend {
 
     /// Register a file descriptor for write events.
     fn register_write(&self, fd: libc::c_int, user_data: u64) {
-        let mut event = KEvent {
+        let event = KEvent {
             ident: fd as usize,
             filter: EVFILT_WRITE,
             flags: EV_ADD | EV_ENABLE | EV_CLEAR,
@@ -300,13 +312,8 @@ impl Backend for KqueueBackend {
                     self.register_read(fd, user_data);
 
                     // Synchronous accept
-                    let result = unsafe {
-                        libc::accept(
-                            fd,
-                            *addr as *mut libc::sockaddr,
-                            *addrlen as *mut libc::socklen_t,
-                        )
-                    };
+                    let result =
+                        unsafe { libc::accept(fd, *addr, *addrlen as *mut libc::socklen_t) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     self.unregister(fd);
                     submitted += 1;
@@ -318,13 +325,7 @@ impl Backend for KqueueBackend {
                     self.register_write(fd, user_data);
 
                     // Synchronous connect
-                    let result = unsafe {
-                        libc::connect(
-                            fd,
-                            *addr as *const libc::sockaddr,
-                            *addrlen as libc::socklen_t,
-                        )
-                    };
+                    let result = unsafe { libc::connect(fd, *addr, *addrlen as libc::socklen_t) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     self.unregister(fd);
                     submitted += 1;
@@ -336,7 +337,7 @@ impl Backend for KqueueBackend {
                     self.register_read(fd, user_data);
 
                     // Synchronous recv
-                    let result = unsafe { libc::recv(fd, buf as *mut libc::c_void, *len, 0) };
+                    let result = unsafe { libc::recv(fd, *buf as *mut libc::c_void, *len, 0) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     self.unregister(fd);
                     submitted += 1;
@@ -348,7 +349,7 @@ impl Backend for KqueueBackend {
                     self.register_write(fd, user_data);
 
                     // Synchronous send
-                    let result = unsafe { libc::send(fd, buf as *const libc::c_void, *len, 0) };
+                    let result = unsafe { libc::send(fd, *buf as *const libc::c_void, *len, 0) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
                     self.unregister(fd);
                     submitted += 1;
@@ -368,7 +369,8 @@ impl Backend for KqueueBackend {
                     // Vectored read: use preadv for file I/O (kqueue doesn't support async file I/O)
                     let fd = *fd;
                     let user_data = flow.user_data();
-                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
 
                     // Convert to iovec for preadv
                     let iovecs: Vec<libc::iovec> = bufs_slice
@@ -380,7 +382,12 @@ impl Backend for KqueueBackend {
                         .collect();
 
                     let result = unsafe {
-                        libc::preadv(fd, iovecs.as_ptr(), iovecs.len() as i32, *offset as libc::off_t)
+                        libc::preadv(
+                            fd,
+                            iovecs.as_ptr(),
+                            iovecs.len() as i32,
+                            *offset as libc::off_t,
+                        )
                     };
 
                     self.register_read(fd, user_data);
@@ -397,7 +404,8 @@ impl Backend for KqueueBackend {
                     // Vectored write: use pwritev for file I/O
                     let fd = *fd;
                     let user_data = flow.user_data();
-                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
 
                     let iovecs: Vec<libc::iovec> = bufs_slice
                         .iter()
@@ -408,7 +416,12 @@ impl Backend for KqueueBackend {
                         .collect();
 
                     let result = unsafe {
-                        libc::pwritev(fd, iovecs.as_ptr(), iovecs.len() as i32, *offset as libc::off_t)
+                        libc::pwritev(
+                            fd,
+                            iovecs.as_ptr(),
+                            iovecs.len() as i32,
+                            *offset as libc::off_t,
+                        )
                     };
 
                     self.register_write(fd, user_data);
@@ -420,7 +433,7 @@ impl Backend for KqueueBackend {
         }
 
         self.in_flight.fetch_add(submitted, Ordering::Relaxed);
-        Ok(submitted)
+        Ok(submitted as usize)
     }
 
     fn reap(&self, results: &mut Vec<TorusResult>) -> tpt_torus_core::error::Result<usize> {
