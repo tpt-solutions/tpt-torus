@@ -5,10 +5,14 @@ use tpt_torus_core::backend::Backend;
 use tpt_torus_core::flow::Flow;
 use tpt_torus_core::operation::Operation;
 use tpt_torus_core::result::Result as TorusResult;
-use tpt_torus_sys::{io_uring_cqe, io_uring_params, io_uring_sqe, opcodes, queue_exit, queue_init};
+use tpt_torus_sys::{
+    io_uring_cqe, io_uring_params, io_uring_sqe, ioprio_flags, opcodes, queue_exit, queue_init,
+};
 
+use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{fence, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 /// Memory-mapped kernel ring pointers.
 struct MmapRing {
@@ -52,6 +56,9 @@ pub struct UringBackend {
     cqes: *mut io_uring_cqe,
     cqes_len: usize,
     in_flight: AtomicU32,
+    /// Maps a registered buffer's base address to its io_uring buffer index,
+    /// enabling `IORING_OP_*_FIXED` zero-copy I/O.
+    registered: Mutex<HashMap<u64, u32>>,
 }
 
 unsafe impl Send for UringBackend {}
@@ -62,7 +69,26 @@ impl UringBackend {
     pub fn new(entries: u32) -> Result<Self, &'static str> {
         let mut params: io_uring_params = unsafe { std::mem::zeroed() };
         let fd = queue_init(entries, &mut params)?;
+        Self::build(fd, &params)
+    }
 
+    /// Create a new io_uring backend with SQPOLL enabled.
+    ///
+    /// SQPOLL makes the kernel poll the submission ring on a dedicated thread,
+    /// eliminating `io_uring_enter` syscalls on submission at the cost of a CPU
+    /// core. `sq_thread_idle` is the number of milliseconds the kernel thread
+    /// waits before sleeping (0 = never sleep). SQPOLL must be set at setup
+    /// time, so this is an alternative constructor rather than a mutating call.
+    pub fn new_with_sqpoll(entries: u32, sq_thread_idle: u32) -> Result<Self, &'static str> {
+        let mut params: io_uring_params = unsafe { std::mem::zeroed() };
+        params.flags = tpt_torus_sys::setup_flags::IORING_SETUP_SQPOLL;
+        params.sq_thread_idle = sq_thread_idle;
+        let fd = queue_init(entries, &mut params)?;
+        Self::build(fd, &params)
+    }
+
+    /// Build the backend by memory-mapping the kernel rings for an already-open fd.
+    fn build(fd: i32, params: &io_uring_params) -> Result<Self, &'static str> {
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
 
         let sq_entries = params.sq_entries;
@@ -166,11 +192,23 @@ impl UringBackend {
             cqes: cqes_ptr,
             cqes_len,
             in_flight: AtomicU32::new(0),
+            registered: Mutex::new(HashMap::new()),
         })
     }
 
     fn fd(&self) -> i32 {
         self.fd
+    }
+
+    /// Look up the registered-buffer index for `buf`, if it matches a registered
+    /// region base exactly. Only exact base matches are used for fixed I/O so
+    /// that data is written to the correct location (a registered iovec's base).
+    fn fixed_index(&self, buf: *const u8) -> Option<u16> {
+        self.registered
+            .lock()
+            .unwrap()
+            .get(&(buf as u64))
+            .and_then(|&i| u16::try_from(i).ok())
     }
 
     /// Register buffers with io_uring for zero-copy fixed-buffer I/O.
@@ -179,53 +217,56 @@ impl UringBackend {
     /// `IORING_OP_WRITE_FIXED` and identified by their index in the registered
     /// array. This avoids per-operation address translation in the kernel.
     ///
-    /// # Safety
-    ///
-    /// - All iovecs must point to valid, live memory regions
-    /// - Buffers must remain valid until `unregister_buffers` is called
-    /// - Must not be called while operations are in-flight on these buffers
-    pub unsafe fn register_buffers(&self, iovecs: *const libc::iovec, count: u32) -> Result<(), i32> {
-        let ret = tpt_torus_sys::io_uring_register(
-            self.fd,
-            1, // IORING_REGISTER_BUFFERS
-            iovecs as *const std::ffi::c_void,
-            count,
-        );
-        if ret < 0 {
-            Err(-ret)
-        } else {
-            Ok(())
+    /// The base address of each region is recorded so the submission path can
+    /// switch to the fixed opcodes when a buffer matches a registered base.
+    pub fn register_buffers(
+        &self,
+        buffers: &[tpt_torus_core::backend::RegisterBuffer],
+    ) -> tpt_torus_core::error::Result<()> {
+        if buffers.is_empty() {
+            return Ok(());
         }
+        let iovecs: Vec<libc::iovec> = buffers
+            .iter()
+            .map(|b| libc::iovec {
+                iov_base: b.ptr as *mut libc::c_void,
+                iov_len: b.len,
+            })
+            .collect();
+        let ret = unsafe {
+            tpt_torus_sys::io_uring_register(
+                self.fd,
+                1, // IORING_REGISTER_BUFFERS
+                iovecs.as_ptr() as *const std::ffi::c_void,
+                iovecs.len() as u32,
+            )
+        };
+        if ret < 0 {
+            return Err(tpt_torus_core::error::Error::Os(-ret as i32));
+        }
+        let mut map = self.registered.lock().unwrap();
+        map.clear();
+        for (i, b) in buffers.iter().enumerate() {
+            map.insert(b.ptr as u64, i as u32);
+        }
+        Ok(())
     }
 
     /// Unregister all previously registered buffers.
-    pub fn unregister_buffers(&self) -> Result<(), i32> {
-        let ret = unsafe {
-            tpt_torus_sys::io_uring_unregister(self.fd, 1) // IORING_UNREGISTER_BUFFERS
-        };
+    pub fn unregister_buffers(&self) -> tpt_torus_core::error::Result<()> {
+        let ret = unsafe { tpt_torus_sys::io_uring_unregister(self.fd, 1) }; // IORING_UNREGISTER_BUFFERS
         if ret < 0 {
-            Err(-ret)
-        } else {
-            Ok(())
+            return Err(tpt_torus_core::error::Error::Os(-ret as i32));
         }
+        self.registered.lock().unwrap().clear();
+        Ok(())
     }
 
-    /// Enable SQPOLL mode — the kernel polls the submission ring on a dedicated
-    /// thread, eliminating the need for `io_uring_enter` syscalls on submission.
-    ///
-    /// This reduces latency for high-throughput workloads but burns a CPU core.
-    /// `sq_thread_idle` is the number of milliseconds the kernel thread waits
-    /// before sleeping (0 = never sleep).
-    pub fn enable_sqpoll(&self, sq_thread_idle: u32) -> Result<(), i32> {
-        let mut params: io_uring_params = unsafe { std::mem::zeroed() };
-        params.flags = tpt_torus_sys::setup_flags::IORING_SETUP_SQPOLL;
-        params.sq_thread_idle = sq_thread_idle;
-
-        // Note: SQPOLL must be set at io_uring_setup time, not after.
-        // This method documents the API; actual SQPOLL creation requires
-        // passing the flag to UringBackend::new via params.
-        let _ = params;
-        Err(libc::ENOSYS) // Not yet supported post-creation
+    /// SQPOLL must be set at `io_uring_setup` time. Use
+    /// [`UringBackend::new_with_sqpoll`] instead of this method.
+    #[deprecated(note = "use UringBackend::new_with_sqpoll to enable SQPOLL at setup time")]
+    pub fn enable_sqpoll(&self, _sq_thread_idle: u32) -> Result<(), i32> {
+        Err(libc::ENOSYS)
     }
 
     /// Submit a multi-shot accept operation.
@@ -253,13 +294,16 @@ impl UringBackend {
 
         let index = (tail & mask) as usize;
         let sqe = unsafe { &mut *self.sqe_array.add(index) };
+        unsafe { std::ptr::write_bytes(sqe, 0u8, 1) };
 
         sqe.opcode = opcodes::IORING_OP_ACCEPT;
         sqe.fd = listen_fd;
         sqe.addr_splice_off_in = addr as u64;
         sqe.len = 0;
         sqe.off_addr2 = addrlen as u64;
-        sqe.flags = tpt_torus_sys::sqe_flags::IOSQE_IO_DRAIN;
+        // Multi-shot: keep the operation armed across completions. This bit
+        // lives in `ioprio`, not `op_flags` (which holds accept4() flags).
+        sqe.ioprio = ioprio_flags::IORING_ACCEPT_MULTISHOT;
         sqe.user_data = user_data;
 
         unsafe {
@@ -279,7 +323,7 @@ impl UringBackend {
     /// Submit a multi-shot recv operation.
     ///
     /// Stays active after each completion, delivering received data for every
-    /// incoming message without re-submitting. Uses `IOSQE_IO_DRAIN`.
+    /// incoming message without re-submitting.
     pub fn submit_multi_recv(
         &self,
         fd: i32,
@@ -298,12 +342,15 @@ impl UringBackend {
 
         let index = (tail & mask) as usize;
         let sqe = unsafe { &mut *self.sqe_array.add(index) };
+        unsafe { std::ptr::write_bytes(sqe, 0u8, 1) };
 
         sqe.opcode = opcodes::IORING_OP_RECV;
         sqe.fd = fd;
         sqe.addr_splice_off_in = buf as u64;
         sqe.len = len as u32;
-        sqe.flags = tpt_torus_sys::sqe_flags::IOSQE_IO_DRAIN;
+        // Multi-shot: keep the operation armed across completions. This bit
+        // lives in `ioprio`, not `op_flags` (which holds recv() MSG_* flags).
+        sqe.ioprio = ioprio_flags::IORING_RECV_MULTISHOT;
         sqe.user_data = user_data;
 
         unsafe {
@@ -337,6 +384,7 @@ impl UringBackend {
 
         let index = (tail & mask) as usize;
         let sqe = unsafe { &mut *self.sqe_array.add(index) };
+        unsafe { std::ptr::write_bytes(sqe, 0u8, 1) };
 
         sqe.opcode = opcodes::IORING_OP_ASYNC_CANCEL;
         sqe.fd = 0;
@@ -359,6 +407,17 @@ impl UringBackend {
 }
 
 impl Backend for UringBackend {
+    fn register_buffers(
+        &self,
+        buffers: &[tpt_torus_core::backend::RegisterBuffer],
+    ) -> tpt_torus_core::error::Result<()> {
+        UringBackend::register_buffers(self, buffers)
+    }
+
+    fn unregister_buffers(&self) -> tpt_torus_core::error::Result<()> {
+        UringBackend::unregister_buffers(self)
+    }
+
     fn submit(&self, flows: &[Flow]) -> tpt_torus_core::error::Result<usize> {
         let mut submitted = 0u32;
 
@@ -374,6 +433,9 @@ impl Backend for UringBackend {
 
             let index = (tail & mask) as usize;
             let sqe = unsafe { &mut *self.sqe_array.add(index) };
+            // Ring SQEs are reused; zero the entry so a stale buf_group/op_flags
+            // from a previous fixed/multi-shot op can't leak into this submission.
+            unsafe { std::ptr::write_bytes(sqe, 0u8, 1) };
 
             match flow.operation() {
                 Operation::Read {
@@ -382,7 +444,12 @@ impl Backend for UringBackend {
                     len,
                     offset,
                 } => {
-                    sqe.opcode = opcodes::IORING_OP_READ;
+                    if let Some(idx) = self.fixed_index(*buf) {
+                        sqe.opcode = opcodes::IORING_OP_READ_FIXED;
+                        sqe.buf_group = idx;
+                    } else {
+                        sqe.opcode = opcodes::IORING_OP_READ;
+                    }
                     sqe.fd = *fd;
                     sqe.addr_splice_off_in = *buf as u64;
                     sqe.len = *len as u32;
@@ -394,7 +461,12 @@ impl Backend for UringBackend {
                     len,
                     offset,
                 } => {
-                    sqe.opcode = opcodes::IORING_OP_WRITE;
+                    if let Some(idx) = self.fixed_index(*buf) {
+                        sqe.opcode = opcodes::IORING_OP_WRITE_FIXED;
+                        sqe.buf_group = idx;
+                    } else {
+                        sqe.opcode = opcodes::IORING_OP_WRITE;
+                    }
                     sqe.fd = *fd;
                     sqe.addr_splice_off_in = *buf as u64;
                     sqe.len = *len as u32;
@@ -444,7 +516,12 @@ impl Backend for UringBackend {
 
                     // Write the first buffer to the current SQE
                     if let Some(first) = bufs_slice.first() {
-                        sqe.opcode = opcodes::IORING_OP_READ;
+                        if let Some(idx) = self.fixed_index(first.buf) {
+                            sqe.opcode = opcodes::IORING_OP_READ_FIXED;
+                            sqe.buf_group = idx;
+                        } else {
+                            sqe.opcode = opcodes::IORING_OP_READ;
+                        }
                         sqe.fd = *fd;
                         sqe.addr_splice_off_in = first.buf as u64;
                         sqe.len = first.len as u32;
@@ -462,7 +539,13 @@ impl Backend for UringBackend {
                             }
                             let next_index = (next_tail & mask) as usize;
                             let next_sqe = unsafe { &mut *self.sqe_array.add(next_index) };
-                            next_sqe.opcode = opcodes::IORING_OP_READ;
+                            unsafe { std::ptr::write_bytes(next_sqe, 0u8, 1) };
+                            if let Some(idx) = self.fixed_index(buf_desc.buf) {
+                                next_sqe.opcode = opcodes::IORING_OP_READ_FIXED;
+                                next_sqe.buf_group = idx;
+                            } else {
+                                next_sqe.opcode = opcodes::IORING_OP_READ;
+                            }
                             next_sqe.fd = *fd;
                             next_sqe.addr_splice_off_in = buf_desc.buf as u64;
                             next_sqe.len = buf_desc.len as u32;
@@ -490,7 +573,12 @@ impl Backend for UringBackend {
                     let mut current_offset = *offset;
 
                     if let Some(first) = bufs_slice.first() {
-                        sqe.opcode = opcodes::IORING_OP_WRITE;
+                        if let Some(idx) = self.fixed_index(first.buf) {
+                            sqe.opcode = opcodes::IORING_OP_WRITE_FIXED;
+                            sqe.buf_group = idx;
+                        } else {
+                            sqe.opcode = opcodes::IORING_OP_WRITE;
+                        }
                         sqe.fd = *fd;
                         sqe.addr_splice_off_in = first.buf as u64;
                         sqe.len = first.len as u32;
@@ -507,7 +595,13 @@ impl Backend for UringBackend {
                             }
                             let next_index = (next_tail & mask) as usize;
                             let next_sqe = unsafe { &mut *self.sqe_array.add(next_index) };
-                            next_sqe.opcode = opcodes::IORING_OP_WRITE;
+                            unsafe { std::ptr::write_bytes(next_sqe, 0u8, 1) };
+                            if let Some(idx) = self.fixed_index(buf_desc.buf) {
+                                next_sqe.opcode = opcodes::IORING_OP_WRITE_FIXED;
+                                next_sqe.buf_group = idx;
+                            } else {
+                                next_sqe.opcode = opcodes::IORING_OP_WRITE;
+                            }
                             next_sqe.fd = *fd;
                             next_sqe.addr_splice_off_in = buf_desc.buf as u64;
                             next_sqe.len = buf_desc.len as u32;

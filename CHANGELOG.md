@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `spdk` / `dpdk` features now perform real, runtime-loaded native integration
   (load `libspdk` / `libdpdk` and call the real NVMe / poll-mode I/O APIs; gracefully
   degrade to `NotAvailable` when the native library is absent)
+- **Zero-copy fixed-buffer I/O**: `LeaseRegistry::as_register_buffers`, `Backend::register_buffers` /
+  `unregister_buffers` (no-op default), and `UringBackend` uses `IORING_REGISTER_BUFFERS` +
+  `IORING_OP_READ/WRITE_FIXED` for buffers whose base matches a registered region; bridged to users
+  via `Torus::register_leases`
+- **Multi-shot accept/recv + SQPOLL**: `submit_multi_accept`/`submit_multi_recv` use real
+  `SOCK_MULTISHOT`/`MSG_MULTISHOT` flags; `UringBackend::new_with_sqpoll` enables
+  `IORING_SETUP_SQPOLL` at ring setup (replacing the no-op `enable_sqpoll`)
 
 ### Changed
 

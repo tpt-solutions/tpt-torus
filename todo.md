@@ -134,10 +134,11 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 ### Innovation / architecture
 
 - [x] Shard the `Torus`/`Backend` lock — replace the single global `Mutex<Box<dyn Backend>>` (`backend.rs:9-27`, `lib.rs:34-92`) with per-core `Torus` instances or lock-free SQ/CQ to avoid serializing all I/O across threads
-- [ ] Wire io_uring registered buffers/files (`IORING_REGISTER_BUFFERS`) into `LeaseRegistry` for zero-copy fixed-buffer I/O
-- [ ] Add multi-shot accept/recv and SQPOLL mode support to `tpt-torus-backend-uring`
+- [x] Wire io_uring registered buffers (`IORING_REGISTER_BUFFERS`) into `LeaseRegistry` for zero-copy fixed-buffer I/O — `LeaseRegistry::as_register_buffers` + `Backend::register_buffers`/`unregister_buffers` (default no-op) + `UringBackend` records base→index and switches `Read`/`Write`/`Readv`/`Writev` to `IORING_OP_READ/WRITE_FIXED`; exposed via `Torus::register_leases`
+- [x] Add multi-shot accept/recv (`IORING_ACCEPT_MULTISHOT` / `IORING_RECV_MULTISHOT` in `sqe.ioprio` — an earlier version of this wrote bogus flags to `sqe.op_flags` and never actually armed multishot; fixed and covered by `test_multi_shot_recv_yields_multiple_completions`) and SQPOLL mode support to `tpt-torus-backend-uring` — `UringBackend::new_with_sqpoll` sets `IORING_SETUP_SQPOLL` at setup (replacing the no-op `enable_sqpoll`)
+- [ ] Fix `UringBackend::wait`'s `min_complete` heuristic (`tpt-torus-backend-uring/src/lib.rs` `wait`/`reap`) — `reap()` decrements `in_flight` to 0 after the first multishot completion even though the op is still armed server-side, so a subsequent `wait()` computes `min_complete = 0` and returns immediately instead of blocking for the next completion (worked around by polling `reap()` directly in the multishot test; needs a real fix, e.g. tracking "armed multishot ops" separately from `in_flight`)
 - [x] Add a uniform batched/vectored submit API (`submitv`) across all three backends
-- [ ] Add XDP (eXpress Data Path) as a lightweight alternative to DPDK for networking bypass — runs eBPF at driver level, no hugepages/kernel modules needed, works with standard NICs
+- [x] Add XDP (eXpress Data Path) as a lightweight alternative to DPDK for networking bypass — runs eBPF at driver level, no hugepages/kernel modules needed, works with standard NICs (`tpt-torus-hw/src/xdp.rs`)
 - [x] Add tracing/observability hooks — a span per Flow submit→completion, latency histograms per `Operation` type
 
 ### Adoption / usability / automation

@@ -156,6 +156,83 @@ fn test_batch_submit() {
     std::fs::remove_file(&tmpfile).ok();
 }
 
+/// Proves `submit_multi_recv` actually arms io_uring's multishot mode: a
+/// single submission must yield more than one completion as separate reads
+/// arrive on the same socket, without the caller re-submitting recv in
+/// between. This is a regression test for a bug where the multishot bit was
+/// written to the wrong SQE field (`op_flags` instead of `ioprio`), which
+/// silently fell back to one-shot behavior.
+#[test]
+fn test_multi_shot_recv_yields_multiple_completions() {
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+    use std::os::unix::io::AsRawFd;
+    use std::sync::mpsc;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
+    let addr = listener.local_addr().expect("local_addr failed");
+
+    let (tx_go, rx_go) = mpsc::channel::<()>();
+    let (tx_done, rx_done) = mpsc::channel::<()>();
+
+    let client = thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).expect("connect failed");
+        // Send the first chunk, then wait until the server has reaped it
+        // before sending the second, so each completion is checked against
+        // an undisturbed buffer.
+        stream.write_all(b"first!").expect("write 1 failed");
+        rx_go.recv().expect("sync recv failed");
+        stream.write_all(b"second").expect("write 2 failed");
+        tx_done.send(()).ok();
+    });
+
+    let (server_stream, _) = listener.accept().expect("accept failed");
+    let fd = server_stream.as_raw_fd();
+
+    let backend = UringBackend::new(256).expect("failed to create uring backend");
+
+    let mut buf = vec![0u8; 64];
+    backend
+        .submit_multi_recv(fd, buf.as_mut_ptr(), buf.len(), 99)
+        .expect("submit_multi_recv failed");
+
+    // First completion.
+    backend.wait(5_000_000).expect("wait 1 failed");
+    let mut results = Vec::new();
+    backend.reap(&mut results).expect("reap 1 failed");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_ok(), "recv 1 failed: {}", results[0].raw());
+    assert_eq!(results[0].user_data, 99);
+    let n1 = results[0].bytes().expect("missing byte count");
+    assert_eq!(&buf[..n1], b"first!");
+
+    // Let the client send the second chunk only now, then reap without
+    // resubmitting — proves the op is still armed from the one submission.
+    //
+    // Note: `reap()` decrements `in_flight` back to 0 after the first
+    // completion above, so `wait()`'s `min_complete` would be 0 here and it
+    // would return immediately instead of blocking for the second
+    // completion. Poll `reap()` directly instead of relying on `wait()`.
+    tx_go.send(()).expect("sync send failed");
+    let mut results = Vec::new();
+    for _ in 0..500 {
+        backend.reap(&mut results).expect("reap 2 failed");
+        if !results.is_empty() {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(results.len(), 1, "second completion never arrived");
+    assert!(results[0].is_ok(), "recv 2 failed: {}", results[0].raw());
+    assert_eq!(results[0].user_data, 99);
+    let n2 = results[0].bytes().expect("missing byte count");
+    assert_eq!(&buf[..n2], b"second");
+
+    rx_done.recv().expect("client join signal failed");
+    client.join().expect("client thread panicked");
+}
+
 #[test]
 fn test_in_flight_counter() {
     let backend = UringBackend::new(256).expect("failed to create uring backend");

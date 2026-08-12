@@ -143,6 +143,18 @@ pub mod sqe_flags {
     pub const IOSQE_BUFFER_SELECT: u8 = 1 << 5;
 }
 
+// ─── ioprio Flags (multishot accept/recv) ─────────────────────────────────
+
+/// Flags OR'd into `io_uring_sqe::ioprio` for ops that support them.
+///
+/// Multishot mode for `IORING_OP_ACCEPT`/`IORING_OP_RECV` is armed via bits in
+/// `ioprio`, not the `op_flags` union slot (which holds the normal
+/// `accept4()`/`recv()` flags).
+pub mod ioprio_flags {
+    pub const IORING_ACCEPT_MULTISHOT: u16 = 1 << 0;
+    pub const IORING_RECV_MULTISHOT: u16 = 1 << 1;
+}
+
 // ─── Setup Flags ───────────────────────────────────────────────────────────
 
 /// Flags for `io_uring_params::flags`.

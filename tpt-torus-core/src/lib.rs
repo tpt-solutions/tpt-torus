@@ -149,6 +149,48 @@ impl Torus {
         &self.cq
     }
 
+    /// Register all buffers currently tracked by `registry` with the OS kernel
+    /// for zero-copy fixed-buffer I/O (io_uring `IORING_REGISTER_BUFFERS`).
+    ///
+    /// After this call, `read`/`write` operations whose buffer matches a
+    /// registered region base will be issued as `IORING_OP_READ_FIXED` /
+    /// `WRITE_FIXED`, skipping per-operation address translation in the kernel.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use tpt_torus_core::lease::LeaseRegistry;
+    /// use tpt_torus_core::Torus;
+    /// # fn make_torus() -> Torus { unimplemented!() }
+    /// let torus = make_torus();
+    /// let registry = LeaseRegistry::new();
+    /// let mut buf = vec![0u8; 4096];
+    /// unsafe { registry.register(buf.as_mut_ptr(), buf.len()) };
+    /// torus.register_leases(&registry)?; // enables IORING_OP_READ/WRITE_FIXED
+    /// # Ok::<(), tpt_torus_core::Error>(())
+    /// ```
+    ///
+    /// # Platform notes
+    /// - Linux (io_uring): registers the regions with the kernel immediately.
+    /// - Other platforms: this is a no-op (no fixed-buffer mechanism available).
+    #[cfg(unix)]
+    pub fn register_leases(&self, registry: &LeaseRegistry) -> crate::error::Result<()> {
+        let buffers = registry.as_register_buffers();
+        if buffers.is_empty() {
+            return Ok(());
+        }
+        self.backend.lock().unwrap().register_buffers(&buffers)
+    }
+
+    /// Register lease buffers with the kernel.
+    ///
+    /// No-op on platforms without a fixed-buffer mechanism. See the Unix
+    /// implementation of [`Torus::register_leases`].
+    #[cfg(not(unix))]
+    pub fn register_leases(&self, _registry: &LeaseRegistry) -> crate::error::Result<()> {
+        Ok(())
+    }
+
     /// Get raw, unguarded access to the Torus, bypassing Buffer Leasing.
     ///
     /// # Safety
