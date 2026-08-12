@@ -5,7 +5,14 @@
 //! NOTE: kqueue does not natively support async file I/O on macOS/BSD.
 //! File operations are dispatched to a thread pool. Socket operations
 //! use kqueue's native EVFILT_READ/EVFILT_WRITE for true async I/O.
-#![cfg(unix)]
+#![cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
 
 use tpt_torus_core::backend::Backend;
 use tpt_torus_core::flow::Flow;

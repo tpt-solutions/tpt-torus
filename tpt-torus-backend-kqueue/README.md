@@ -4,7 +4,7 @@ macOS/BSD **kqueue** backend engine for [TPT Torus](https://github.com/tpt-solut
 
 This crate implements `tpt_torus_core::backend::Backend` using the same background-reactor pattern as IOCP, built on raw `kevent`/`kqueue` FFI (declared inline in this crate, since kqueue's ABI is simple enough to inline rather than live in `tpt-torus-sys`). Socket I/O uses native `EVFILT_READ` / `EVFILT_WRITE` for true async I/O; **file I/O is dispatched to a thread pool** because kqueue has no native async file I/O on macOS/BSD.
 
-Available on Unix (`cfg(unix)`, covering macOS/BSD).
+Available on macOS/BSD only (`cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))`) — `kqueue`/`kevent` are not present on Linux despite it also being `cfg(unix)`.
 
 ## What it provides
 
@@ -39,7 +39,7 @@ torus.reap(&mut results).expect("reap");
 
 ## Platform notes
 
-- Unix only (`cfg(unix)`), covering macOS and the BSDs. On Windows/Linux `cargo build -p tpt-torus-backend-kqueue` compiles an empty crate.
+- macOS/BSD only. On Windows/Linux `cargo build -p tpt-torus-backend-kqueue` compiles an empty crate.
 - File I/O is performed on a thread pool rather than through kqueue; socket I/O is event-driven.
 
 ## Relationship to other crates

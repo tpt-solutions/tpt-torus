@@ -32,7 +32,7 @@ Fuzzing (FFI/parsing boundary): `cargo fuzz run <target>` from `fuzz/` (targets:
 - **Default branch is `master`** (CI triggers on `master`), not `main` — `CONTRIBUTING.md` says branch from `main`, which contradicts the actual repo.
 - CI runs a three-OS matrix: `ubuntu-latest`, `windows-latest`, `macos-latest` — formatting → clippy → build → test.
 - MSRV is **1.87.0** (pinned in CI and `rust-version`); clippy uses `-D warnings`, so fix all lints before assuming CI passes.
-- Backend crates are platform-gated at the crate root (`#![cfg(target_os = ...)]`): `backend-uring` builds only on Linux, `backend-iocp` only on Windows, `backend-kqueue` on `cfg(unix)`. A change to one backend is **not** exercised locally on another OS — rely on CI.
+- Backend crates are platform-gated at the crate root (`#![cfg(target_os = ...)]`): `backend-uring` builds only on Linux, `backend-iocp` only on Windows, `backend-kqueue` on an explicit macOS/BSD `target_os` list (not `cfg(unix)` — Linux is `unix` too but has no `kqueue`/`kevent`). A change to one backend is **not** exercised locally on another OS — rely on CI.
 
 ## Architecture essentials
 

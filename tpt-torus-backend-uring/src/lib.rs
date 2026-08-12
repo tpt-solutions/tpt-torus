@@ -93,8 +93,6 @@ impl UringBackend {
 
         let sq_entries = params.sq_entries;
         let cq_entries = params.cq_entries;
-        let sq_mask = sq_entries - 1;
-        let cq_mask = cq_entries - 1;
 
         // mmap SQ ring: head + tail + ring_mask + ring_entries + flags + dropped + array[]
         let sq_ring_size =
@@ -194,10 +192,6 @@ impl UringBackend {
             in_flight: AtomicU32::new(0),
             registered: Mutex::new(HashMap::new()),
         })
-    }
-
-    fn fd(&self) -> i32 {
-        self.fd
     }
 
     /// Look up the registered-buffer index for `buf`, if it matches a registered
@@ -307,6 +301,7 @@ impl UringBackend {
         sqe.user_data = user_data;
 
         unsafe {
+            *self.sq_ring.array.add(index) = index as u32;
             (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
         }
 
@@ -354,6 +349,7 @@ impl UringBackend {
         sqe.user_data = user_data;
 
         unsafe {
+            *self.sq_ring.array.add(index) = index as u32;
             (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
         }
 
@@ -392,6 +388,7 @@ impl UringBackend {
         sqe.user_data = cancel_user_data;
 
         unsafe {
+            *self.sq_ring.array.add(index) = index as u32;
             (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
         }
 
@@ -553,6 +550,7 @@ impl Backend for UringBackend {
                             next_sqe.off_addr2 = current_offset;
                             next_sqe.user_data = flow.user_data();
                             unsafe {
+                                *self.sq_ring.array.add(next_index) = next_index as u32;
                                 (*self.sq_ring.tail)
                                     .store(next_tail.wrapping_add(1), Ordering::Release);
                             }
@@ -611,6 +609,7 @@ impl Backend for UringBackend {
                             next_sqe.off_addr2 = current_offset;
                             next_sqe.user_data = flow.user_data();
                             unsafe {
+                                *self.sq_ring.array.add(next_index) = next_index as u32;
                                 (*self.sq_ring.tail)
                                     .store(next_tail.wrapping_add(1), Ordering::Release);
                             }
@@ -626,6 +625,7 @@ impl Backend for UringBackend {
             sqe.user_data = flow.user_data();
 
             unsafe {
+                *self.sq_ring.array.add(index) = index as u32;
                 (*self.sq_ring.tail).store(tail.wrapping_add(1), Ordering::Release);
             }
             submitted += 1;
@@ -650,7 +650,6 @@ impl Backend for UringBackend {
 
     fn reap(&self, results: &mut Vec<TorusResult>) -> tpt_torus_core::error::Result<usize> {
         let mask = self.cq_ring.mask();
-        let entries = self.cq_ring.entries();
         let mut count = 0u32;
 
         loop {
@@ -676,7 +675,10 @@ impl Backend for UringBackend {
         Ok(count as usize)
     }
 
-    fn wait(&self, timeout_us: u64) -> tpt_torus_core::error::Result<()> {
+    fn wait(&self, _timeout_us: u64) -> tpt_torus_core::error::Result<()> {
+        // NOTE: the timeout is not currently honored — this always blocks
+        // indefinitely via IORING_ENTER_GETEVENTS. Bounding it requires the
+        // IORING_ENTER_EXT_ARG timespec path, not yet wired up in tpt-torus-sys.
         let min_complete = if self.in_flight.load(Ordering::Relaxed) == 0 {
             0
         } else {

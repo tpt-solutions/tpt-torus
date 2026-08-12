@@ -2,7 +2,14 @@
 //!
 //! These tests require macOS or BSD with kqueue support.
 
-#![cfg(unix)]
+#![cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
 
 use tpt_torus_backend_kqueue::KqueueBackend;
 use tpt_torus_core::backend::Backend;

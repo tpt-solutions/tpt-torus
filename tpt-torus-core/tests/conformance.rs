@@ -9,6 +9,10 @@
 //! run on all platforms.
 
 use tpt_torus_core::backend::Backend;
+#[cfg(unix)]
+use tpt_torus_core::flow::Flow;
+#[cfg(unix)]
+use tpt_torus_core::operation::Operation;
 
 fn create_backend() -> Box<dyn Backend> {
     #[cfg(target_os = "linux")]
@@ -248,8 +252,8 @@ fn conformance_socket_echo() {
     let backend = create_backend();
 
     // Create a socket pair
-    let (mut reader, mut writer) =
-        std::net::TcpStream::pair().expect("failed to create socket pair");
+    let (reader, writer) =
+        std::os::unix::net::UnixStream::pair().expect("failed to create socket pair");
     reader.set_nonblocking(true).ok();
     writer.set_nonblocking(true).ok();
 
