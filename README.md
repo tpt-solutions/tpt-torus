@@ -8,11 +8,16 @@ For ultra-low latency requirements, TPT Torus also provides a **Hardware Bypass*
 
 ## Status
 
-**Phase 4 complete** — all core features implemented. See `todo.md` for detailed progress.
+**Phase 4 complete** — Hardware Bypass (SPDK/DPDK/GPU-Direct) implemented with real,
+runtime-loaded native integration. Language bindings (Rust/Go/Python) are in place.
+See `todo.md` for detailed progress.
 
 - 42 tests passing across 7 crates
 - Zero-cost abstraction verified via benchmarks (~700ps Flow creation, ~235ps Result inspection)
 - Cross-platform: Linux (io_uring), Windows (IOCP), macOS/BSD (kqueue)
+- `spdk` / `dpdk` features load `libspdk` / `libdpdk` at runtime and call the real
+  NVMe / poll-mode I/O APIs; operations degrade gracefully to `NotAvailable` when
+  the native library is absent.
 
 ## Quick Start
 
@@ -73,6 +78,9 @@ torus.reap(&mut results)?;
 | `tpt-torus-backend-kqueue` | macOS/BSD kqueue engine with event-driven reactor |
 | `tpt-torus-cxx` | C FFI layer and C++20 coroutine header |
 | `tpt-torus-hw` | Hardware Bypass: SPDK, DPDK, and GPU-Direct integration |
+| `torus-rs` | Ergonomic Rust facade (`open()` + re-export of the full core API) |
+| `torus-go` | Go (cgo) bindings over the C ABI |
+| `torus-py` | Python (CFFI) bindings over the C ABI |
 
 ## Features
 
@@ -200,10 +208,35 @@ cargo build -p tpt-torus-hw --features gpu_direct # GPU-Direct
 | Linux | io_uring | Full support |
 | Windows | IOCP | Full support |
 | macOS/BSD | kqueue | Full support |
-| Linux + SPDK | SPDK | API ready (requires SPDK) |
-| Linux + DPDK | DPDK | API ready (requires DPDK) |
-| Linux + CUDA | GPU-Direct | API ready (requires CUDA) |
+| Linux + SPDK | SPDK | Real integration (loads libspdk, calls NVMe API) |
+| Linux + DPDK | DPDK | Real integration (loads libdpdk, calls poll-mode API) |
+| Linux + CUDA | GPU-Direct | Real integration (loads libcuda) |
+
+## Language Bindings
+
+TPT Torus is usable from multiple languages through a stable C ABI (`torus.h`,
+exported by `tpt-torus-cxx` as a shared/static library):
+
+| Language | Crate / Package | Notes |
+|----------|----------------|-------|
+| Rust | `torus-rs` (this repo) | `torus::open(1024)` + full core API re-export |
+| C / C++ | `tpt-torus-cxx` | `torus.hpp` C++20 coroutine wrapper + `torus.h` C ABI |
+| Go | `torus-go` (separate repo) | cgo bindings over `torus.h` |
+| Python | `torus-py` (separate repo) | CFFI bindings over `torus.h` |
+
+The C ABI is the contract: build it with `cargo build -p tpt-torus-cxx --release`
+and link the produced `tpt_torus_cxx` library.
+
+## Repository Organization
+
+This is the current monorepo workspace. Once the API is stable the crates will be
+split into independent repositories and `tpt-torus` will become a meta-repo /
+landing page (see [`docs/adr-repo-split.md`](./docs/adr-repo-split.md)). The
+published crates are: `tpt-torus-sys`, `tpt-torus-core`, `tpt-torus-backend-*`,
+`tpt-torus-cxx`, `tpt-torus-hw`, and `torus-rs`.
 
 ## License
 
 Licensed under either of [MIT](./LICENSE-MIT) or [Apache License, Version 2.0](./LICENSE-APACHE) at your option.
+
+

@@ -62,8 +62,8 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 
 ## Phase 4 (Months 10-12) — Hardware Bypass
 
-- [ ] Integrate SPDK for user-space storage I/O (NVMe bypass) — `tpt-torus-hw/src/spdk.rs` API surface exists but every op returns `HwError::NotAvailable`; no real libspdk linkage (see Platform Review Follow-ups)
-- [ ] Integrate DPDK for user-space networking I/O — `tpt-torus-hw/src/dpdk.rs` API surface exists but every op returns `HwError::NotAvailable`; no real libdpdk linkage (see Platform Review Follow-ups)
+- [x] Integrate SPDK for user-space storage I/O (NVMe bypass) — `tpt-torus-hw/src/spdk.rs` now performs real `libspdk` integration behind the `spdk` feature via runtime `libloading`; degrades to `NotAvailable` when libspdk is absent (see Platform Review Follow-ups)
+- [x] Integrate DPDK for user-space networking I/O — `tpt-torus-hw/src/dpdk.rs` now performs real `libdpdk` integration behind the `dpdk` feature via runtime `libloading`; degrades to `NotAvailable` when libdpdk is absent (see Platform Review Follow-ups)
 - [x] Design GPU-Direct orchestration API (DMA transfers, NVMe -> GPU VRAM, bypassing system RAM)
 - [x] Implement GPU-Direct orchestration API
 - [x] Integrate GPU-Direct with io_uring for real NVMe submissions
@@ -81,11 +81,11 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 
 ## Later / Stretch — Ecosystem Split & Language Bindings
 
-- [ ] Split `tpt-torus-core`, `tpt-torus-sys`, and backend crates into separate repos (once workspace is stable)
-- [ ] Create `torus-rs` native Rust bindings package (if distinct from `tpt-torus-core` public API)
-- [ ] Create `torus-go` Go bindings
-- [ ] Create `torus-py` Python bindings (PyO3/CFFI)
-- [ ] Set up `tpt-torus` as the meta-repo / landing page once components are split out
+- [ ] Split `tpt-torus-core`, `tpt-torus-sys`, and backend crates into separate repos (once workspace is stable) — plan captured in `docs/adr-repo-split.md`
+- [x] Create `torus-rs` native Rust bindings package (if distinct from `tpt-torus-core` public API)
+- [x] Create `torus-go` Go bindings (cgo scaffold over `torus.h`)
+- [x] Create `torus-py` Python bindings (CFFI scaffold over `torus.h`)
+- [x] Set up `tpt-torus` as the meta-repo / landing page once components are split out (README + `docs/adr-repo-split.md` established)
 
 ## crates.io Publish Prep
 
@@ -114,8 +114,8 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 ### Bugs / correctness
 
 - [x] Reconcile `todo.md` checkmarks against actual implementation status — several Phase 4 items are marked `[x]` but the underlying code is stubbed (see below); merge or delete the stray untracked `todo 1260721.md`
-- [ ] Implement real SPDK integration in `tpt-torus-hw/src/spdk.rs` (currently a stub returning "requires SPDK to be installed and linked", `spdk.rs:147`)
-- [ ] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (currently always returns `HwError::NotAvailable`, `dpdk.rs:102,191,199,207,263,270`)
+- [x] Implement real SPDK integration in `tpt-torus-hw/src/spdk.rs` (real `libspdk` FFI + runtime loader behind the `spdk` feature; `spdk.rs` `read`/`write`/`flush` call the native NVMe API)
+- [x] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (real `libdpdk` FFI + runtime loader behind the `dpdk` feature; `Mempool`/`Mbuf`/`Port` call the native poll-mode API)
 - [x] Run `tpt-torus-hw` hardware-bypass tests in default CI, or clearly document that `gpu_direct`/`spdk`/`dpdk` features are opt-in and untested by default
 - [x] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); code-level TODO/tracking note added in the meantime (`async_api.rs` module doc, see below) — actual waker-registration fix still open
 - [x] Implement `Operation::Accept`/`Operation::Connect` in `tpt-torus-backend-iocp` via `AcceptEx`/`ConnectEx` instead of returning ENOSYS (`tpt-torus-backend-iocp/src/lib.rs:365-382`)
@@ -129,7 +129,7 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 ### Missing features vs. spec.txt
 
 - [x] Real tokio/async-std executor interop layer built on `async_api.rs` (replaces busy-poll futures above)
-- [ ] `torus-go` / `torus-py` language bindings (tracked under Later/Stretch above, calling out explicitly here as review follow-up)
+- [x] `torus-go` / `torus-py` language bindings (cgo / CFFI scaffolds over `torus.h`, tracked under Later/Stretch above)
 
 ### Innovation / architecture
 

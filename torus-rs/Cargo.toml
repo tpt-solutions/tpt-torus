@@ -1,0 +1,30 @@
+[package]
+name = "torus-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Ergonomic Rust bindings for TPT Torus — cross-platform async I/O over io_uring / IOCP / kqueue, with optional hardware bypass."
+readme = "README.md"
+keywords = ["async-io", "io_uring", "iocp", "kqueue", "nvme"]
+categories = ["asynchronous", "os"]
+
+[lib]
+name = "torus"
+path = "src/lib.rs"
+
+[dependencies]
+tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
+tpt-torus-backend-uring = { path = "../tpt-torus-backend-uring", version = "0.1.0" }
+tpt-torus-backend-iocp = { path = "../tpt-torus-backend-iocp", version = "0.1.0" }
+tpt-torus-backend-kqueue = { path = "../tpt-torus-backend-kqueue", version = "0.1.0" }
+tpt-torus-hw = { path = "../tpt-torus-hw", version = "0.1.0", optional = true }
+
+[features]
+default = []
+hardware = ["dep:tpt-torus-hw"]
+spdk = ["tpt-torus-hw/spdk"]
+dpdk = ["tpt-torus-hw/dpdk"]
+gpu_direct = ["tpt-torus-hw/gpu_direct"]

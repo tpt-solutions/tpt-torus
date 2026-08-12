@@ -45,7 +45,9 @@ pub mod xdp;
 pub use dpdk::{Mbuf, Mempool};
 #[cfg(feature = "gpu_direct")]
 pub use gpu_direct::{GpuBuffer, GpuDirect, TransferDirection};
-pub use spdk::{NvmeCmd, NvmeNamespace};
+pub use spdk::{
+    Controller, NvmeCmd, NvmeNamespace, Spdk, SpdkNvmeCpl, SpdkNvmeTransportId,
+};
 
 /// Errors specific to hardware bypass operations.
 #[derive(Debug)]

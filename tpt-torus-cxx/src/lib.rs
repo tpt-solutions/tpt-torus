@@ -4,6 +4,7 @@
 //! It wraps the Rust `Torus` handle and provides callback-based async operations.
 
 use std::sync::Arc;
+use tpt_torus_core::backend::Backend;
 use tpt_torus_core::flow::Flow;
 use tpt_torus_core::operation::Operation;
 use tpt_torus_core::Torus;
@@ -22,6 +23,58 @@ pub struct TorusHandle {
 pub type CompletionCallback =
     extern "C" fn(result: i64, user_data: u64, context: *mut std::ffi::c_void);
 
+/// Construct the platform-default backend for `torus_create`.
+fn make_backend(ring_entries: u32) -> Option<Box<dyn Backend>> {
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))
+    ))]
+    {
+        Some(Box::new(tpt_torus_backend_uring::UringBackend::new(ring_entries).ok()?))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = ring_entries;
+        Some(Box::new(tpt_torus_backend_iocp::IocpBackend::new().ok()?))
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    {
+        let _ = ring_entries;
+        Some(Box::new(tpt_torus_backend_kqueue::KqueueBackend::new().ok()?))
+    }
+
+    #[cfg(not(any(
+        unix,
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    {
+        let _ = ring_entries;
+        None
+    }
+}
+
 /// Create a new Torus instance.
 ///
 /// # Arguments
@@ -30,13 +83,22 @@ pub type CompletionCallback =
 ///
 /// # Returns
 /// Pointer to the Torus handle, or NULL on failure.
+///
+/// # Safety
+/// The returned pointer must be freed with [`torus_destroy`].
 #[no_mangle]
 pub extern "C" fn torus_create(ring_entries: u32, _backend: i32) -> *mut TorusHandle {
-    // For now, we don't support creating backends from C.
-    // The backend must be created on the Rust side and passed in.
-    // This is a limitation of the current design.
-    let _ = (ring_entries, _backend);
-    std::ptr::null_mut()
+    let backend = match make_backend(ring_entries) {
+        Some(b) => b,
+        None => return std::ptr::null_mut(),
+    };
+
+    match Torus::new(ring_entries, backend) {
+        Ok(torus) => Box::into_raw(Box::new(TorusHandle {
+            torus: Arc::new(torus),
+        })),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Create a new Torus instance with a pre-configured backend.
