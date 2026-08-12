@@ -110,12 +110,7 @@ impl<'a> RawTorus<'a> {
     /// - Every buffer in `bufs` must point to valid, live memory
     /// - Buffers must not be freed or modified until the operation completes
     /// - `fd` must be a valid file descriptor
-    pub unsafe fn submit_readv(
-        &self,
-        fd: i32,
-        bufs: &[IoSlice],
-        offset: u64,
-    ) -> crate::Result<()> {
+    pub unsafe fn submit_readv(&self, fd: i32, bufs: &[IoSlice], offset: u64) -> crate::Result<()> {
         let flow = Flow::new(Operation::Readv {
             fd,
             bufs: bufs.as_ptr(),

@@ -82,13 +82,7 @@ impl Torus {
     ///
     /// Reads from `fd` at `offset` into multiple buffers described by `bufs`.
     /// Returns the total number of bytes read across all buffers.
-    pub fn readv(
-        &self,
-        fd: i32,
-        bufs: &[IoSlice],
-        offset: u64,
-        user_data: u64,
-    ) -> Result<()> {
+    pub fn readv(&self, fd: i32, bufs: &[IoSlice], offset: u64, user_data: u64) -> Result<()> {
         let flow = Flow::with_user_data(
             Operation::Readv {
                 fd,
@@ -105,13 +99,7 @@ impl Torus {
     ///
     /// Writes to `fd` at `offset` from multiple buffers described by `bufs`.
     /// Returns the total number of bytes written across all buffers.
-    pub fn writev(
-        &self,
-        fd: i32,
-        bufs: &[IoSlice],
-        offset: u64,
-        user_data: u64,
-    ) -> Result<()> {
+    pub fn writev(&self, fd: i32, bufs: &[IoSlice], offset: u64, user_data: u64) -> Result<()> {
         let flow = Flow::with_user_data(
             Operation::Writev {
                 fd,
@@ -235,11 +223,7 @@ impl TorusPool {
     ///
     /// Each instance gets `ring_entries` SQ/CQ entries. The `make_backend`
     /// closure is called once per instance to create the platform-specific backend.
-    pub fn new<F>(
-        count: usize,
-        ring_entries: u32,
-        make_backend: F,
-    ) -> Result<Self>
+    pub fn new<F>(count: usize, ring_entries: u32, make_backend: F) -> Result<Self>
     where
         F: Fn(u32) -> Result<Box<dyn Backend>>,
     {

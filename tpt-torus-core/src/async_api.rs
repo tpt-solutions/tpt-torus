@@ -752,8 +752,7 @@ impl<'a> Future for CloseFuture<'a> {
         match this.state {
             FutureState::Init => {
                 this.user_data = this.registry.alloc_id();
-                let flow =
-                    Flow::with_user_data(Operation::Close { fd: this.fd }, this.user_data);
+                let flow = Flow::with_user_data(Operation::Close { fd: this.fd }, this.user_data);
 
                 match this.torus.submit(&flow) {
                     Ok(()) => {

@@ -37,7 +37,9 @@ fn make_backend(ring_entries: u32) -> Option<Box<dyn Backend>> {
         ))
     ))]
     {
-        Some(Box::new(tpt_torus_backend_uring::UringBackend::new(ring_entries).ok()?))
+        Some(Box::new(
+            tpt_torus_backend_uring::UringBackend::new(ring_entries).ok()?,
+        ))
     }
 
     #[cfg(target_os = "windows")]
@@ -56,7 +58,9 @@ fn make_backend(ring_entries: u32) -> Option<Box<dyn Backend>> {
     ))]
     {
         let _ = ring_entries;
-        Some(Box::new(tpt_torus_backend_kqueue::KqueueBackend::new().ok()?))
+        Some(Box::new(
+            tpt_torus_backend_kqueue::KqueueBackend::new().ok()?,
+        ))
     }
 
     #[cfg(not(any(

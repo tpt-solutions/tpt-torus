@@ -13,7 +13,10 @@ use tpt_torus_core::backend::Backend;
 fn create_backend() -> Box<dyn Backend> {
     #[cfg(target_os = "linux")]
     {
-        Box::new(tpt_torus_backend_uring::UringBackend::new(256).expect("failed to create uring backend"))
+        Box::new(
+            tpt_torus_backend_uring::UringBackend::new(256)
+                .expect("failed to create uring backend"),
+        )
     }
     #[cfg(target_os = "windows")]
     {
@@ -21,7 +24,10 @@ fn create_backend() -> Box<dyn Backend> {
     }
     #[cfg(target_os = "macos")]
     {
-        Box::new(tpt_torus_backend_kqueue::KqueueBackend::new(256).expect("failed to create kqueue backend"))
+        Box::new(
+            tpt_torus_backend_kqueue::KqueueBackend::new(256)
+                .expect("failed to create kqueue backend"),
+        )
     }
 }
 
@@ -51,7 +57,12 @@ fn conformance_file_write_and_read() {
     let fd = AsRawFd::as_raw_fd(&file);
 
     let write_flow = Flow::with_user_data(
-        Operation::Write { fd, buf: message.as_ptr(), len: message.len(), offset: 0 },
+        Operation::Write {
+            fd,
+            buf: message.as_ptr(),
+            len: message.len(),
+            offset: 0,
+        },
         1,
     );
 
@@ -74,7 +85,12 @@ fn conformance_file_write_and_read() {
 
     let mut buf = vec![0u8; 4096];
     let read_flow = Flow::with_user_data(
-        Operation::Read { fd, buf: buf.as_mut_ptr(), len: buf.len(), offset: 0 },
+        Operation::Read {
+            fd,
+            buf: buf.as_mut_ptr(),
+            len: buf.len(),
+            offset: 0,
+        },
         2,
     );
 
@@ -110,11 +126,21 @@ fn conformance_batch_submit() {
     let data2 = b"Second chunk\n";
     let flows = vec![
         Flow::with_user_data(
-            Operation::Write { fd, buf: data1.as_ptr(), len: data1.len(), offset: 0 },
+            Operation::Write {
+                fd,
+                buf: data1.as_ptr(),
+                len: data1.len(),
+                offset: 0,
+            },
             1,
         ),
         Flow::with_user_data(
-            Operation::Write { fd, buf: data2.as_ptr(), len: data2.len(), offset: data1.len() as u64 },
+            Operation::Write {
+                fd,
+                buf: data2.as_ptr(),
+                len: data2.len(),
+                offset: data1.len() as u64,
+            },
             2,
         ),
     ];
@@ -154,7 +180,12 @@ fn conformance_user_data_preserved() {
     let data = b"test";
     let custom_user_data = 42u64;
     let flow = Flow::with_user_data(
-        Operation::Write { fd, buf: data.as_ptr(), len: data.len(), offset: 0 },
+        Operation::Write {
+            fd,
+            buf: data.as_ptr(),
+            len: data.len(),
+            offset: 0,
+        },
         custom_user_data,
     );
 
@@ -186,7 +217,12 @@ fn conformance_zero_length_write() {
     let fd = AsRawFd::as_raw_fd(&file);
 
     let flow = Flow::with_user_data(
-        Operation::Write { fd, buf: b"".as_ptr(), len: 0, offset: 0 },
+        Operation::Write {
+            fd,
+            buf: b"".as_ptr(),
+            len: 0,
+            offset: 0,
+        },
         1,
     );
 
@@ -212,7 +248,8 @@ fn conformance_socket_echo() {
     let backend = create_backend();
 
     // Create a socket pair
-    let (mut reader, mut writer) = std::net::TcpStream::pair().expect("failed to create socket pair");
+    let (mut reader, mut writer) =
+        std::net::TcpStream::pair().expect("failed to create socket pair");
     reader.set_nonblocking(true).ok();
     writer.set_nonblocking(true).ok();
 
@@ -221,7 +258,11 @@ fn conformance_socket_echo() {
 
     let data = b"socket echo test";
     let write_flow = Flow::with_user_data(
-        Operation::Send { fd: write_fd, buf: data.as_ptr(), len: data.len() },
+        Operation::Send {
+            fd: write_fd,
+            buf: data.as_ptr(),
+            len: data.len(),
+        },
         1,
     );
 
@@ -238,7 +279,11 @@ fn conformance_socket_echo() {
         // Read it back
         let mut buf = vec![0u8; 4096];
         let read_flow = Flow::with_user_data(
-            Operation::Recv { fd: read_fd, buf: buf.as_mut_ptr(), len: buf.len() },
+            Operation::Recv {
+                fd: read_fd,
+                buf: buf.as_mut_ptr(),
+                len: buf.len(),
+            },
             2,
         );
 

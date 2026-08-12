@@ -41,11 +41,27 @@ impl FlowSpan {
         #[cfg(feature = "tracing")]
         let span = {
             let op_name = match &flow.operation {
-                Operation::Read { fd, len, offset, .. } => {
-                    tracing::info_span!("torus_io", op = "read", fd = fd, len = len, offset = offset)
+                Operation::Read {
+                    fd, len, offset, ..
+                } => {
+                    tracing::info_span!(
+                        "torus_io",
+                        op = "read",
+                        fd = fd,
+                        len = len,
+                        offset = offset
+                    )
                 }
-                Operation::Write { fd, len, offset, .. } => {
-                    tracing::info_span!("torus_io", op = "write", fd = fd, len = len, offset = offset)
+                Operation::Write {
+                    fd, len, offset, ..
+                } => {
+                    tracing::info_span!(
+                        "torus_io",
+                        op = "write",
+                        fd = fd,
+                        len = len,
+                        offset = offset
+                    )
                 }
                 Operation::Accept { fd, .. } => {
                     tracing::info_span!("torus_io", op = "accept", fd = fd)

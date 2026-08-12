@@ -737,7 +737,8 @@ impl Backend for IocpBackend {
                     // Vectored read: submit individual ReadFile ops for each buffer.
                     // Total bytes = sum of individual results (reported on completion).
                     let handle = *fd as HANDLE;
-                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
                     let mut current_offset = *offset;
 
                     for buf_desc in bufs_slice {
@@ -758,15 +759,24 @@ impl Backend for IocpBackend {
                         }
 
                         let ret = unsafe {
-                            ReadFile(handle, buf_desc.buf, buf_desc.len as u32, ptr::null_mut(), ovl_ptr)
+                            ReadFile(
+                                handle,
+                                buf_desc.buf,
+                                buf_desc.len as u32,
+                                ptr::null_mut(),
+                                ovl_ptr,
+                            )
                         };
 
                         if ret == 0 {
                             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                            unsafe { drop(Box::from_raw(ovl_ptr)); }
-                            self.completions.lock().unwrap().push_back(
-                                TorusResult::new(-err as i64, flow.user_data()),
-                            );
+                            unsafe {
+                                drop(Box::from_raw(ovl_ptr));
+                            }
+                            self.completions
+                                .lock()
+                                .unwrap()
+                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
                             self.notify.notify_one();
                             break;
                         }
@@ -782,7 +792,8 @@ impl Backend for IocpBackend {
                 } => {
                     // Vectored write: submit individual WriteFile ops for each buffer.
                     let handle = *fd as HANDLE;
-                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
                     let mut current_offset = *offset;
 
                     for buf_desc in bufs_slice {
@@ -803,15 +814,24 @@ impl Backend for IocpBackend {
                         }
 
                         let ret = unsafe {
-                            WriteFile(handle, buf_desc.buf, buf_desc.len as u32, ptr::null_mut(), ovl_ptr)
+                            WriteFile(
+                                handle,
+                                buf_desc.buf,
+                                buf_desc.len as u32,
+                                ptr::null_mut(),
+                                ovl_ptr,
+                            )
                         };
 
                         if ret == 0 {
                             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                            unsafe { drop(Box::from_raw(ovl_ptr)); }
-                            self.completions.lock().unwrap().push_back(
-                                TorusResult::new(-err as i64, flow.user_data()),
-                            );
+                            unsafe {
+                                drop(Box::from_raw(ovl_ptr));
+                            }
+                            self.completions
+                                .lock()
+                                .unwrap()
+                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
                             self.notify.notify_one();
                             break;
                         }

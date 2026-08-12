@@ -170,7 +170,8 @@ struct SpdkApi {
 }
 
 #[cfg(feature = "spdk")]
-type SpdkProbeCb = unsafe extern "C" fn(*mut c_void, *const SpdkNvmeTransportId, *mut c_void) -> c_int;
+type SpdkProbeCb =
+    unsafe extern "C" fn(*mut c_void, *const SpdkNvmeTransportId, *mut c_void) -> c_int;
 #[cfg(feature = "spdk")]
 type SpdkAttachCb =
     unsafe extern "C" fn(*mut c_void, *const SpdkNvmeTransportId, *mut c_void, *const c_void);
@@ -203,24 +204,39 @@ fn api() -> HwResult<&'static SpdkApi> {
 
     macro_rules! load_fn {
         ($lib:expr, $name:ident, $ty:ty) => {{
-            let sym = unsafe { $lib.get::<$ty>(stringify!($name).as_bytes()) }
-                .map_err(|e| {
-                    HwError::NotAvailable(format!("SPDK symbol {} not found: {}", stringify!($name), e))
-                })?;
+            let sym = unsafe { $lib.get::<$ty>(stringify!($name).as_bytes()) }.map_err(|e| {
+                HwError::NotAvailable(format!(
+                    "SPDK symbol {} not found: {}",
+                    stringify!($name),
+                    e
+                ))
+            })?;
             *sym
         }};
     }
 
     let api = SpdkApi {
-        spdk_env_opts_init: load_fn!(lib, spdk_env_opts_init, unsafe extern "C" fn(*mut SpdkEnvOpts)),
-        spdk_env_init: load_fn!(lib, spdk_env_init, unsafe extern "C" fn(*const SpdkEnvOpts) -> c_int),
+        spdk_env_opts_init: load_fn!(
+            lib,
+            spdk_env_opts_init,
+            unsafe extern "C" fn(*mut SpdkEnvOpts)
+        ),
+        spdk_env_init: load_fn!(
+            lib,
+            spdk_env_init,
+            unsafe extern "C" fn(*const SpdkEnvOpts) -> c_int
+        ),
         spdk_env_fini: load_fn!(lib, spdk_env_fini, unsafe extern "C" fn()),
         spdk_nvme_transport_id_populate_trstring: load_fn!(
             lib,
             spdk_nvme_transport_id_populate_trstring,
             unsafe extern "C" fn(*mut SpdkNvmeTransportId, *const c_char) -> c_int
         ),
-        spdk_nvme_probe_ctx_create: load_fn!(lib, spdk_nvme_probe_ctx_create, unsafe extern "C" fn() -> *mut c_void),
+        spdk_nvme_probe_ctx_create: load_fn!(
+            lib,
+            spdk_nvme_probe_ctx_create,
+            unsafe extern "C" fn() -> *mut c_void
+        ),
         spdk_nvme_probe_ctx_add_transport_id: load_fn!(
             lib,
             spdk_nvme_probe_ctx_add_transport_id,
@@ -229,28 +245,80 @@ fn api() -> HwResult<&'static SpdkApi> {
         spdk_nvme_probe: load_fn!(
             lib,
             spdk_nvme_probe,
-            unsafe extern "C" fn(*mut c_void, *mut c_void, SpdkProbeCb, SpdkAttachCb, SpdkRemoveCb) -> c_int
+            unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                SpdkProbeCb,
+                SpdkAttachCb,
+                SpdkRemoveCb,
+            ) -> c_int
         ),
-        spdk_nvme_ctrlr_get_num_ns: load_fn!(lib, spdk_nvme_ctrlr_get_num_ns, unsafe extern "C" fn(*mut c_void) -> u32),
-        spdk_nvme_ctrlr_get_ns: load_fn!(lib, spdk_nvme_ctrlr_get_ns, unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void),
+        spdk_nvme_ctrlr_get_num_ns: load_fn!(
+            lib,
+            spdk_nvme_ctrlr_get_num_ns,
+            unsafe extern "C" fn(*mut c_void) -> u32
+        ),
+        spdk_nvme_ctrlr_get_ns: load_fn!(
+            lib,
+            spdk_nvme_ctrlr_get_ns,
+            unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void
+        ),
         spdk_nvme_ctrlr_alloc_io_qpair: load_fn!(
             lib,
             spdk_nvme_ctrlr_alloc_io_qpair,
             unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> *mut c_void
         ),
-        spdk_nvme_ctrlr_free_io_qpair: load_fn!(lib, spdk_nvme_ctrlr_free_io_qpair, unsafe extern "C" fn(*mut c_void) -> c_int),
-        spdk_nvme_ns_get_size: load_fn!(lib, spdk_nvme_ns_get_size, unsafe extern "C" fn(*mut c_void) -> u64),
-        spdk_nvme_ns_get_sector_size: load_fn!(lib, spdk_nvme_ns_get_sector_size, unsafe extern "C" fn(*mut c_void) -> u32),
-        spdk_nvme_ns_get_num_sectors: load_fn!(lib, spdk_nvme_ns_get_num_sectors, unsafe extern "C" fn(*mut c_void) -> u64),
+        spdk_nvme_ctrlr_free_io_qpair: load_fn!(
+            lib,
+            spdk_nvme_ctrlr_free_io_qpair,
+            unsafe extern "C" fn(*mut c_void) -> c_int
+        ),
+        spdk_nvme_ns_get_size: load_fn!(
+            lib,
+            spdk_nvme_ns_get_size,
+            unsafe extern "C" fn(*mut c_void) -> u64
+        ),
+        spdk_nvme_ns_get_sector_size: load_fn!(
+            lib,
+            spdk_nvme_ns_get_sector_size,
+            unsafe extern "C" fn(*mut c_void) -> u32
+        ),
+        spdk_nvme_ns_get_num_sectors: load_fn!(
+            lib,
+            spdk_nvme_ns_get_num_sectors,
+            unsafe extern "C" fn(*mut c_void) -> u64
+        ),
         spdk_nvme_ns_cmd_read: load_fn!(
             lib,
             spdk_nvme_ns_cmd_read,
-            unsafe extern "C" fn(*mut c_void, *mut c_void, *mut u8, u32, SpdkCmdCb, *mut c_void, u64, u32, u32, *mut c_void) -> c_int
+            unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                *mut u8,
+                u32,
+                SpdkCmdCb,
+                *mut c_void,
+                u64,
+                u32,
+                u32,
+                *mut c_void,
+            ) -> c_int
         ),
         spdk_nvme_ns_cmd_write: load_fn!(
             lib,
             spdk_nvme_ns_cmd_write,
-            unsafe extern "C" fn(*mut c_void, *mut c_void, *const u8, u32, SpdkCmdCb, *mut c_void, u64, u32, u32, *mut c_void) -> c_int
+            unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                *const u8,
+                u32,
+                SpdkCmdCb,
+                *mut c_void,
+                u64,
+                u32,
+                u32,
+                *mut c_void,
+            ) -> c_int
         ),
         spdk_nvme_ns_cmd_flush: load_fn!(
             lib,
@@ -262,8 +330,16 @@ fn api() -> HwResult<&'static SpdkApi> {
             spdk_nvme_qpair_process_completions,
             unsafe extern "C" fn(*mut c_void, u32) -> u32
         ),
-        spdk_nvme_detach: load_fn!(lib, spdk_nvme_detach, unsafe extern "C" fn(*mut c_void) -> c_int),
-        spdk_dma_malloc: load_fn!(lib, spdk_dma_malloc, unsafe extern "C" fn(usize, usize, *mut u64) -> *mut c_void),
+        spdk_nvme_detach: load_fn!(
+            lib,
+            spdk_nvme_detach,
+            unsafe extern "C" fn(*mut c_void) -> c_int
+        ),
+        spdk_dma_malloc: load_fn!(
+            lib,
+            spdk_dma_malloc,
+            unsafe extern "C" fn(usize, usize, *mut u64) -> *mut c_void
+        ),
         spdk_dma_free: load_fn!(lib, spdk_dma_free, unsafe extern "C" fn(*mut c_void)),
         _lib: lib,
     };
@@ -347,7 +423,10 @@ impl Spdk {
             unsafe { (api.spdk_env_opts_init)(&mut opts as *mut SpdkEnvOpts) };
             let rc = unsafe { (api.spdk_env_init)(&opts as *const SpdkEnvOpts) };
             if rc != 0 {
-                return Err(HwError::InitFailed(format!("spdk_env_init returned {}", rc)));
+                return Err(HwError::InitFailed(format!(
+                    "spdk_env_init returned {}",
+                    rc
+                )));
             }
             Ok(())
         }
@@ -380,7 +459,9 @@ impl Spdk {
             let api = api()?;
             let ctx = unsafe { (api.spdk_nvme_probe_ctx_create)() };
             if ctx.is_null() {
-                return Err(HwError::InitFailed("spdk_nvme_probe_ctx_create failed".into()));
+                return Err(HwError::InitFailed(
+                    "spdk_nvme_probe_ctx_create failed".into(),
+                ));
             }
 
             let c_trid = std::ffi::CString::new(trid)
@@ -421,7 +502,10 @@ impl Spdk {
                 )
             };
             if rc != 0 {
-                return Err(HwError::InitFailed(format!("spdk_nvme_probe returned {}", rc)));
+                return Err(HwError::InitFailed(format!(
+                    "spdk_nvme_probe returned {}",
+                    rc
+                )));
             }
 
             Ok(probe_ctx
@@ -505,7 +589,10 @@ impl Controller {
             let api = api()?;
             let rc = unsafe { (api.spdk_nvme_detach)(self.ctrlr) };
             if rc != 0 {
-                return Err(HwError::InitFailed(format!("spdk_nvme_detach returned {}", rc)));
+                return Err(HwError::InitFailed(format!(
+                    "spdk_nvme_detach returned {}",
+                    rc
+                )));
             }
             Ok(())
         }
@@ -767,9 +854,7 @@ impl NvmeNamespace {
 #[cfg(feature = "spdk")]
 unsafe fn alloc_qpair(ctrlr: *mut c_void) -> HwResult<*mut c_void> {
     let api = api()?;
-    let qpair = unsafe {
-        (api.spdk_nvme_ctrlr_alloc_io_qpair)(ctrlr, std::ptr::null(), 0)
-    };
+    let qpair = unsafe { (api.spdk_nvme_ctrlr_alloc_io_qpair)(ctrlr, std::ptr::null(), 0) };
     if qpair.is_null() {
         return Err(HwError::OutOfMemory);
     }
@@ -810,7 +895,9 @@ fn finish(
             "NVMe command failed: status {:#x}",
             cpl.status_code()
         ))),
-        None => Err(HwError::InitFailed("NVMe command completed without status".into())),
+        None => Err(HwError::InitFailed(
+            "NVMe command completed without status".into(),
+        )),
     }
 }
 

@@ -27,8 +27,8 @@
 //! [`io_uring`]: https://en.wikipedia.org/wiki/Io_uring
 //! [`tpt_torus_core`]: tpt_torus_core
 
-pub use tpt_torus_core::*;
 use tpt_torus_core::backend::Backend;
+pub use tpt_torus_core::*;
 
 /// Hardware-bypass extensions (SPDK / DPDK / GPU-Direct).
 #[cfg(feature = "hardware")]
@@ -65,9 +65,9 @@ pub fn default_backend(ring_entries: u32) -> std::result::Result<Box<dyn Backend
         ))
     ))]
     {
-        Ok(Box::new(
-            tpt_torus_backend_uring::UringBackend::new(ring_entries)?,
-        ))
+        Ok(Box::new(tpt_torus_backend_uring::UringBackend::new(
+            ring_entries,
+        )?))
     }
 
     #[cfg(target_os = "windows")]

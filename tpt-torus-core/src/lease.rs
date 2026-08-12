@@ -202,12 +202,7 @@ impl LeaseRegistry {
 
     /// Number of bytes across all registered regions.
     pub fn total_bytes(&self) -> usize {
-        self.regions
-            .read()
-            .unwrap()
-            .values()
-            .map(|r| r.len)
-            .sum()
+        self.regions.read().unwrap().values().map(|r| r.len).sum()
     }
 }
 

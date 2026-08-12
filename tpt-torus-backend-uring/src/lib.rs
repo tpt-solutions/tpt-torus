@@ -511,7 +511,8 @@ impl Backend for UringBackend {
                     // Vectored read: submit one SQE per buffer with sequential offsets.
                     // This is the fallback; native IORING_OP_READV could be used with
                     // proper iovec support in torus-sys.
-                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
                     let mut current_offset = *offset;
 
                     // Write the first buffer to the current SQE
@@ -552,7 +553,8 @@ impl Backend for UringBackend {
                             next_sqe.off_addr2 = current_offset;
                             next_sqe.user_data = flow.user_data();
                             unsafe {
-                                (*self.sq_ring.tail).store(next_tail.wrapping_add(1), Ordering::Release);
+                                (*self.sq_ring.tail)
+                                    .store(next_tail.wrapping_add(1), Ordering::Release);
                             }
                             submitted += 1;
                             current_offset += buf_desc.len as u64;
@@ -569,7 +571,8 @@ impl Backend for UringBackend {
                     offset,
                 } => {
                     // Vectored write: submit one SQE per buffer with sequential offsets.
-                    let bufs_slice = unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
                     let mut current_offset = *offset;
 
                     if let Some(first) = bufs_slice.first() {
@@ -608,7 +611,8 @@ impl Backend for UringBackend {
                             next_sqe.off_addr2 = current_offset;
                             next_sqe.user_data = flow.user_data();
                             unsafe {
-                                (*self.sq_ring.tail).store(next_tail.wrapping_add(1), Ordering::Release);
+                                (*self.sq_ring.tail)
+                                    .store(next_tail.wrapping_add(1), Ordering::Release);
                             }
                             submitted += 1;
                             current_offset += buf_desc.len as u64;

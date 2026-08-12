@@ -113,14 +113,8 @@ struct DpdkApi {
     rte_eal_init: unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int,
     rte_eal_cleanup: unsafe extern "C" fn() -> c_int,
     rte_eth_dev_count_avail: unsafe extern "C" fn() -> u16,
-    rte_pktmbuf_pool_create: unsafe extern "C" fn(
-        *const c_char,
-        u32,
-        u32,
-        u16,
-        u16,
-        i32,
-    ) -> *mut RteMempool,
+    rte_pktmbuf_pool_create:
+        unsafe extern "C" fn(*const c_char, u32, u32, u16, u16, i32) -> *mut RteMempool,
     rte_mempool_free: unsafe extern "C" fn(*mut RteMempool),
     rte_mempool_avail_count: unsafe extern "C" fn(*mut RteMempool) -> u32,
     rte_pktmbuf_alloc: unsafe extern "C" fn(*mut RteMempool) -> *mut RteMbuf,
@@ -130,19 +124,15 @@ struct DpdkApi {
     rte_pktmbuf_prepend: unsafe extern "C" fn(*mut RteMbuf, u16) -> *mut u8,
     rte_pktmbuf_adj: unsafe extern "C" fn(*mut RteMbuf, u16) -> *mut u8,
     rte_pktmbuf_trim: unsafe extern "C" fn(*mut RteMbuf, u16) -> c_int,
-    rte_eth_dev_configure:
-        unsafe extern "C" fn(u16, u16, u16, *const RteEthConf) -> c_int,
+    rte_eth_dev_configure: unsafe extern "C" fn(u16, u16, u16, *const RteEthConf) -> c_int,
     rte_eth_rx_queue_setup:
         unsafe extern "C" fn(u16, u16, u16, i32, *const c_void, *mut RteMempool) -> c_int,
-    rte_eth_tx_queue_setup:
-        unsafe extern "C" fn(u16, u16, u16, i32, *const c_void) -> c_int,
+    rte_eth_tx_queue_setup: unsafe extern "C" fn(u16, u16, u16, i32, *const c_void) -> c_int,
     rte_eth_dev_start: unsafe extern "C" fn(u16) -> c_int,
     rte_eth_dev_stop: unsafe extern "C" fn(u16) -> c_int,
     rte_eth_stats_get: unsafe extern "C" fn(u16, *mut RteEthStats) -> c_int,
-    rte_eth_rx_burst:
-        unsafe extern "C" fn(u16, u16, *mut *mut RteMbuf, u16) -> u16,
-    rte_eth_tx_burst:
-        unsafe extern "C" fn(u16, u16, *mut *mut RteMbuf, u16) -> u16,
+    rte_eth_rx_burst: unsafe extern "C" fn(u16, u16, *mut *mut RteMbuf, u16) -> u16,
+    rte_eth_tx_burst: unsafe extern "C" fn(u16, u16, *mut *mut RteMbuf, u16) -> u16,
 }
 
 #[cfg(feature = "dpdk")]
@@ -169,22 +159,29 @@ fn api() -> HwResult<&'static DpdkApi> {
 
     macro_rules! load_fn {
         ($lib:expr, $name:ident, $ty:ty) => {{
-            let sym = unsafe { $lib.get::<$ty>(stringify!($name).as_bytes()) }
-                .map_err(|e| {
-                    HwError::NotAvailable(format!(
-                        "DPDK symbol {} not found: {}",
-                        stringify!($name),
-                        e
-                    ))
-                })?;
+            let sym = unsafe { $lib.get::<$ty>(stringify!($name).as_bytes()) }.map_err(|e| {
+                HwError::NotAvailable(format!(
+                    "DPDK symbol {} not found: {}",
+                    stringify!($name),
+                    e
+                ))
+            })?;
             *sym
         }};
     }
 
     let api = DpdkApi {
-        rte_eal_init: load_fn!(lib, rte_eal_init, unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int),
+        rte_eal_init: load_fn!(
+            lib,
+            rte_eal_init,
+            unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int
+        ),
         rte_eal_cleanup: load_fn!(lib, rte_eal_cleanup, unsafe extern "C" fn() -> c_int),
-        rte_eth_dev_count_avail: load_fn!(lib, rte_eth_dev_count_avail, unsafe extern "C" fn() -> u16),
+        rte_eth_dev_count_avail: load_fn!(
+            lib,
+            rte_eth_dev_count_avail,
+            unsafe extern "C" fn() -> u16
+        ),
         rte_pktmbuf_pool_create: load_fn!(
             lib,
             rte_pktmbuf_pool_create,
@@ -222,7 +219,11 @@ fn api() -> HwResult<&'static DpdkApi> {
             rte_pktmbuf_adj,
             unsafe extern "C" fn(*mut RteMbuf, u16) -> *mut u8
         ),
-        rte_pktmbuf_trim: load_fn!(lib, rte_pktmbuf_trim, unsafe extern "C" fn(*mut RteMbuf, u16) -> c_int),
+        rte_pktmbuf_trim: load_fn!(
+            lib,
+            rte_pktmbuf_trim,
+            unsafe extern "C" fn(*mut RteMbuf, u16) -> c_int
+        ),
         rte_eth_dev_configure: load_fn!(
             lib,
             rte_eth_dev_configure,
@@ -287,10 +288,8 @@ impl Dpdk {
                         .map_err(|e| HwError::InvalidParam(format!("invalid EAL arg: {}", e)))
                 })
                 .collect::<Result<_, _>>()?;
-            let mut ptrs: Vec<*mut c_char> = c_args
-                .iter()
-                .map(|c| c.as_ptr() as *mut c_char)
-                .collect();
+            let mut ptrs: Vec<*mut c_char> =
+                c_args.iter().map(|c| c.as_ptr() as *mut c_char).collect();
             let argc = ptrs.len() as c_int;
             let rc = unsafe { (api.rte_eal_init)(argc, ptrs.as_mut_ptr()) };
             if rc < 0 {
@@ -314,7 +313,10 @@ impl Dpdk {
             let api = api()?;
             let rc = unsafe { (api.rte_eal_cleanup)() };
             if rc != 0 {
-                return Err(HwError::InitFailed(format!("rte_eal_cleanup returned {}", rc)));
+                return Err(HwError::InitFailed(format!(
+                    "rte_eal_cleanup returned {}",
+                    rc
+                )));
             }
             Ok(())
         }
@@ -427,7 +429,9 @@ impl Mempool {
             if ptr.is_null() {
                 None
             } else {
-                Some(Mbuf { ptr: ptr as *mut DpdkMbuf })
+                Some(Mbuf {
+                    ptr: ptr as *mut DpdkMbuf,
+                })
             }
         }
         #[cfg(not(feature = "dpdk"))]
@@ -447,11 +451,7 @@ impl Mempool {
                 let mut ptrs: Vec<*mut RteMbuf> =
                     mbufs.iter().map(|m| m.ptr as *mut RteMbuf).collect();
                 unsafe {
-                    (api.rte_pktmbuf_free_bulk)(
-                        self._pool,
-                        ptrs.as_mut_ptr(),
-                        ptrs.len() as u32,
-                    )
+                    (api.rte_pktmbuf_free_bulk)(self._pool, ptrs.as_mut_ptr(), ptrs.len() as u32)
                 };
             }
         }
@@ -714,13 +714,7 @@ impl Port {
             }
             for q in 0..conf.nb_tx_queues {
                 let rc = unsafe {
-                    (api.rte_eth_tx_queue_setup)(
-                        port_id,
-                        q,
-                        NB_DESC,
-                        -1,
-                        std::ptr::null(),
-                    )
+                    (api.rte_eth_tx_queue_setup)(port_id, q, NB_DESC, -1, std::ptr::null())
                 };
                 if rc != 0 {
                     return Err(HwError::InitFailed(format!(
@@ -783,12 +777,7 @@ impl Port {
             let api = api()?;
             let mut ptrs: Vec<*mut RteMbuf> = vec![std::ptr::null_mut(); mbufs.capacity().max(1)];
             let n = unsafe {
-                (api.rte_eth_rx_burst)(
-                    self.port_id,
-                    queue_id,
-                    ptrs.as_mut_ptr(),
-                    ptrs.len() as u16,
-                )
+                (api.rte_eth_rx_burst)(self.port_id, queue_id, ptrs.as_mut_ptr(), ptrs.len() as u16)
             };
             mbufs.clear();
             for &p in ptrs.iter().take(n as usize) {
@@ -817,15 +806,9 @@ impl Port {
         #[cfg(feature = "dpdk")]
         {
             let api = api()?;
-            let mut ptrs: Vec<*mut RteMbuf> =
-                mbufs.iter().map(|m| m.ptr as *mut RteMbuf).collect();
+            let mut ptrs: Vec<*mut RteMbuf> = mbufs.iter().map(|m| m.ptr as *mut RteMbuf).collect();
             let n = unsafe {
-                (api.rte_eth_tx_burst)(
-                    self.port_id,
-                    queue_id,
-                    ptrs.as_mut_ptr(),
-                    ptrs.len() as u16,
-                )
+                (api.rte_eth_tx_burst)(self.port_id, queue_id, ptrs.as_mut_ptr(), ptrs.len() as u16)
             };
             Ok(n as usize)
         }
@@ -852,7 +835,8 @@ impl Port {
                 _pad: [0; 3],
                 rx_nombuf: 0,
             };
-            let rc = unsafe { (api.rte_eth_stats_get)(self.port_id, &mut stats as *mut RteEthStats) };
+            let rc =
+                unsafe { (api.rte_eth_stats_get)(self.port_id, &mut stats as *mut RteEthStats) };
             if rc != 0 {
                 return Err(HwError::InitFailed(format!(
                     "rte_eth_stats_get returned {}",

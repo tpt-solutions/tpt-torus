@@ -578,12 +578,7 @@ pub struct GpuDmaPool {
 
 impl GpuDmaPool {
     /// Create a new GPU-Direct aware DMA pool.
-    pub fn new(
-        buf_size: usize,
-        capacity: usize,
-        uring_fd: i32,
-        device_id: i32,
-    ) -> HwResult<Self> {
+    pub fn new(buf_size: usize, capacity: usize, uring_fd: i32, device_id: i32) -> HwResult<Self> {
         let pool = ZeroCopyDmaPool::new(buf_size, capacity, uring_fd)?;
 
         Ok(Self {
@@ -595,10 +590,7 @@ impl GpuDmaPool {
 
     /// Allocate a buffer and register it with CUDA for GPU-Direct.
     pub fn alloc_for_gpu(&mut self) -> HwResult<BufferHandle> {
-        let handle = self
-            .pool
-            .alloc()
-            .ok_or(HwError::QueueFull)?;
+        let handle = self.pool.alloc().ok_or(HwError::QueueFull)?;
 
         // Register the buffer with CUDA for GPU-Direct access
         let gpu_ptr = crate::cuda::mem_alloc(handle.size())

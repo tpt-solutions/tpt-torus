@@ -282,17 +282,10 @@ criterion_group!(
 );
 
 #[cfg(feature = "gpu_direct")]
-criterion_group!(
-    gpu_benches,
-    bench_gpu_direct,
-    bench_transfer_direction,
-);
+criterion_group!(gpu_benches, bench_gpu_direct, bench_transfer_direction,);
 
 #[cfg(unix)]
-criterion_group!(
-    unix_benches,
-    bench_pipelined_vs_naive,
-);
+criterion_group!(unix_benches, bench_pipelined_vs_naive,);
 
 fn main() {
     benches();
