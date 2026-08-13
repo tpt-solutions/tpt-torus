@@ -820,11 +820,18 @@ impl Backend for UringBackend {
         // NOTE: the timeout is not currently honored — this always blocks
         // indefinitely via IORING_ENTER_GETEVENTS. Bounding it requires the
         // IORING_ENTER_EXT_ARG timespec path, not yet wired up in tpt-torus-sys.
-        let min_complete = if self.in_flight.load(Ordering::Relaxed) == 0 {
-            0
-        } else {
-            1
-        };
+        //
+        // `min_complete` must equal the current number of outstanding
+        // (armed) operations. For one-shot ops `in_flight` is the count of
+        // SQEs still awaiting completion, so the kernel waits until every
+        // submitted operation has produced a CQE — otherwise `reap()` could
+        // return early having drained only a subset of the completions. For
+        // an armed multishot op `in_flight` is 1 and stays 1 across its
+        // intermediate `IORING_CQE_F_MORE` completions (those don't decrement
+        // `in_flight`), so `wait()` still blocks for the next completion as
+        // intended. When `in_flight == 0` `min_complete == 0` returns
+        // immediately.
+        let min_complete = self.in_flight.load(Ordering::Relaxed);
 
         let ret = unsafe {
             tpt_torus_sys::io_uring_enter(
