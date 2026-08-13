@@ -206,7 +206,7 @@ impl IoUringRing {
         let tail = std::ptr::read_volatile(self.tail);
         let index = (tail & self.ring_mask) as usize;
         ptr::copy_nonoverlapping(sqe, self.sqe_array.add(index), 1);
-        std::ptr::store_volatile(self.tail, tail.wrapping_add(1));
+        std::ptr::write_volatile(self.tail, tail.wrapping_add(1));
     }
 
     /// Peek at the next CQE without consuming it.
@@ -223,7 +223,7 @@ impl IoUringRing {
     /// Mark the current CQE as consumed.
     unsafe fn consume_cqe(&self) {
         let head = std::ptr::read_volatile(self.head);
-        std::ptr::store_volatile(self.head, head.wrapping_add(1));
+        std::ptr::write_volatile(self.head, head.wrapping_add(1));
     }
 }
 
