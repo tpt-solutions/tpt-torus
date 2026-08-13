@@ -27,19 +27,31 @@ use std::thread;
 
 // ─── kqueue FFI ────────────────────────────────────────────────────────────
 
+/// FFI flags/filters for kqueue. Some are not yet used by the reactor but are
+/// kept for API completeness; allow dead-code so `-D warnings` CI stays green.
 const EV_ADD: u16 = 0x0001;
 const EV_DELETE: u16 = 0x0002;
 const EV_ENABLE: u16 = 0x0004;
+#[allow(dead_code)]
 const EV_DISABLE: u16 = 0x0008;
 const EV_CLEAR: u16 = 0x0020;
+#[allow(dead_code)]
 const EV_ONESHOT: u16 = 0x0010;
+#[allow(dead_code)]
 const NOTE_WRITE: u32 = 0x00000004;
+#[allow(dead_code)]
 const NOTE_DELETE: u32 = 0x00000001;
+#[allow(dead_code)]
 const NOTE_EXTEND: u32 = 0x00000008;
+#[allow(dead_code)]
 const NOTE_ATTRIB: u32 = 0x00000004;
+#[allow(dead_code)]
 const NOTE_LINK: u32 = 0x00000010;
+#[allow(dead_code)]
 const NOTE_RENAME: u32 = 0x00000020;
+#[allow(dead_code)]
 const NOTE_REVOKE: u32 = 0x00000040;
+#[allow(dead_code)]
 const EVFILT_VNODE: i16 = -4;
 const EVFILT_READ: i16 = -1;
 const EVFILT_WRITE: i16 = -2;
@@ -79,13 +91,6 @@ extern "C" {
         nevents: libc::c_int,
         timeout: *const libc::timespec,
     ) -> libc::c_int;
-}
-
-// ─── Completion entry ──────────────────────────────────────────────────────
-
-struct Completion {
-    result: TorusResult,
-    event_filter: i16,
 }
 
 // ─── kqueue Backend ────────────────────────────────────────────────────────
@@ -187,8 +192,7 @@ impl KqueueBackend {
 
             {
                 let mut cq = completions.lock().unwrap();
-                for i in 0..n as usize {
-                    let event = &events[i];
+                for event in events.iter().take(n as usize) {
                     let udata = event.udata as *const TorusResult;
                     if !udata.is_null() {
                         let result = unsafe { &*udata };
