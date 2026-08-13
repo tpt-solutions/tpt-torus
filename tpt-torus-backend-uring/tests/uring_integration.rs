@@ -250,9 +250,7 @@ fn test_multi_shot_recv_yields_multiple_completions() {
     // the wait. Assert that the "second" payload arrived rather than requiring
     // exactly one completion.
     let got_second = results.iter().any(|r| {
-        r.is_ok()
-            && r.user_data == 99
-            && r.bytes().is_some_and(|n| n > 0 && &buf[..n] == b"second")
+        r.is_ok() && r.user_data == 99 && r.bytes().is_some_and(|n| n > 0 && &buf[..n] == b"second")
     });
     assert!(got_second, "second completion never arrived");
 
