@@ -29,11 +29,15 @@ use std::thread;
 
 /// FFI flags/filters for kqueue. Some are not yet used by the reactor but are
 /// kept for API completeness; allow dead-code so `-D warnings` CI stays green.
+#[allow(dead_code)]
 const EV_ADD: u16 = 0x0001;
+#[allow(dead_code)]
 const EV_DELETE: u16 = 0x0002;
+#[allow(dead_code)]
 const EV_ENABLE: u16 = 0x0004;
 #[allow(dead_code)]
 const EV_DISABLE: u16 = 0x0008;
+#[allow(dead_code)]
 const EV_CLEAR: u16 = 0x0020;
 #[allow(dead_code)]
 const EV_ONESHOT: u16 = 0x0010;
@@ -53,7 +57,9 @@ const NOTE_RENAME: u32 = 0x00000020;
 const NOTE_REVOKE: u32 = 0x00000040;
 #[allow(dead_code)]
 const EVFILT_VNODE: i16 = -4;
+#[allow(dead_code)]
 const EVFILT_READ: i16 = -1;
+#[allow(dead_code)]
 const EVFILT_WRITE: i16 = -2;
 const KEVENT_ARRAY_SIZE: usize = 256;
 
@@ -208,62 +214,6 @@ impl KqueueBackend {
         self.completions.lock().unwrap().push_back(result);
         self.notify.notify_one();
     }
-
-    /// Register a file descriptor for read events.
-    fn register_read(&self, fd: libc::c_int, user_data: u64) {
-        let event = KEvent {
-            ident: fd as usize,
-            filter: EVFILT_READ,
-            flags: EV_ADD | EV_ENABLE | EV_CLEAR,
-            fflags: 0,
-            data: 0,
-            udata: Box::into_raw(Box::new(TorusResult::new(0, user_data))) as *mut _,
-        };
-        unsafe {
-            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
-        }
-    }
-
-    /// Register a file descriptor for write events.
-    fn register_write(&self, fd: libc::c_int, user_data: u64) {
-        let event = KEvent {
-            ident: fd as usize,
-            filter: EVFILT_WRITE,
-            flags: EV_ADD | EV_ENABLE | EV_CLEAR,
-            fflags: 0,
-            data: 0,
-            udata: Box::into_raw(Box::new(TorusResult::new(0, user_data))) as *mut _,
-        };
-        unsafe {
-            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
-        }
-    }
-
-    /// Unregister a file descriptor.
-    fn unregister(&self, fd: libc::c_int) {
-        let event = KEvent {
-            ident: fd as usize,
-            filter: EVFILT_READ,
-            flags: EV_DELETE,
-            fflags: 0,
-            data: 0,
-            udata: ptr::null_mut(),
-        };
-        unsafe {
-            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
-        }
-        let event = KEvent {
-            ident: fd as usize,
-            filter: EVFILT_WRITE,
-            flags: EV_DELETE,
-            fflags: 0,
-            data: 0,
-            udata: ptr::null_mut(),
-        };
-        unsafe {
-            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
-        }
-    }
 }
 
 impl Backend for KqueueBackend {
@@ -278,21 +228,21 @@ impl Backend for KqueueBackend {
                     len,
                     offset,
                 } => {
-                    // File read — dispatch to thread pool (kqueue doesn't support async file I/O)
+                    // File read — synchronous since kqueue doesn't support async file I/O.
                     let fd = *fd;
                     let buf = *buf;
                     let len = *len;
                     let offset = *offset;
                     let user_data = flow.user_data();
 
-                    self.register_read(fd, user_data);
-
-                    // For file I/O, do a synchronous read since kqueue doesn't support it
+                    // For file I/O, do a synchronous read since kqueue doesn't support it.
+                    // The synchronous result is the only completion; we must not register
+                    // the fd with kqueue here (the reactor would post a spurious 0-byte
+                    // completion for the registration event).
                     let result = unsafe {
                         libc::pread(fd, buf as *mut libc::c_void, len, offset as libc::off_t)
                     };
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Write {
@@ -307,23 +257,19 @@ impl Backend for KqueueBackend {
                     let offset = *offset;
                     let user_data = flow.user_data();
 
-                    self.register_write(fd, user_data);
-
-                    // For file I/O, do a synchronous write
+                    // For file I/O, do a synchronous write. The synchronous result is the
+                    // only completion; we must not register the fd with kqueue here.
                     let result = unsafe {
                         libc::pwrite(fd, buf as *const libc::c_void, len, offset as libc::off_t)
                     };
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Accept { fd, addr, addrlen } => {
                     let fd = *fd;
                     let user_data = flow.user_data();
 
-                    self.register_read(fd, user_data);
-
-                    // Synchronous accept
+                    // Synchronous accept (the synchronous result is the only completion).
                     let result = unsafe {
                         libc::accept(
                             fd,
@@ -332,16 +278,13 @@ impl Backend for KqueueBackend {
                         )
                     };
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Connect { fd, addr, addrlen } => {
                     let fd = *fd;
                     let user_data = flow.user_data();
 
-                    self.register_write(fd, user_data);
-
-                    // Synchronous connect
+                    // Synchronous connect (the synchronous result is the only completion).
                     let result = unsafe {
                         libc::connect(
                             fd,
@@ -350,7 +293,6 @@ impl Backend for KqueueBackend {
                         )
                     };
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Recv { fd, buf, len } => {
@@ -359,12 +301,9 @@ impl Backend for KqueueBackend {
                     let len = *len;
                     let user_data = flow.user_data();
 
-                    self.register_read(fd, user_data);
-
-                    // Synchronous recv
+                    // Synchronous recv (the synchronous result is the only completion).
                     let result = unsafe { libc::recv(fd, buf as *mut libc::c_void, len, 0) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Send { fd, buf, len } => {
@@ -373,12 +312,9 @@ impl Backend for KqueueBackend {
                     let len = *len;
                     let user_data = flow.user_data();
 
-                    self.register_write(fd, user_data);
-
-                    // Synchronous send
+                    // Synchronous send (the synchronous result is the only completion).
                     let result = unsafe { libc::send(fd, buf as *const libc::c_void, len, 0) };
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Close { fd } => {
@@ -417,9 +353,7 @@ impl Backend for KqueueBackend {
                         )
                     };
 
-                    self.register_read(fd, user_data);
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
                 Operation::Writev {
@@ -451,9 +385,7 @@ impl Backend for KqueueBackend {
                         )
                     };
 
-                    self.register_write(fd, user_data);
                     self.post_completion(TorusResult::new(result as i64, user_data));
-                    self.unregister(fd);
                     submitted += 1;
                 }
             }

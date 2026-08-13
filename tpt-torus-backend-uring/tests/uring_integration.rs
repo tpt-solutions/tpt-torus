@@ -252,7 +252,7 @@ fn test_multi_shot_recv_yields_multiple_completions() {
     let got_second = results.iter().any(|r| {
         r.is_ok()
             && r.user_data == 99
-            && r.bytes().map_or(false, |n| n > 0 && &buf[..n] == b"second")
+            && r.bytes().is_some_and(|n| n > 0 && &buf[..n] == b"second")
     });
     assert!(got_second, "second completion never arrived");
 
