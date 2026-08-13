@@ -280,7 +280,8 @@ impl UringBackend {
     ///
     /// A multi-shot accept stays active after each completion, delivering a
     /// new connection fd for every incoming connection without re-submitting.
-    /// The SQE uses `IOSQE_IO_DRAIN` to remain active.
+    /// Persistence comes from the `IORING_ACCEPT_MULTISHOT` bit in `ioprio`,
+    /// not a drain flag.
     ///
     /// Returns the user_data assigned to this persistent operation.
     pub fn submit_multi_accept(
@@ -761,6 +762,15 @@ impl Backend for UringBackend {
     fn reap(&self, results: &mut Vec<TorusResult>) -> tpt_torus_core::error::Result<usize> {
         let mask = self.cq_ring.mask();
         let mut count = 0u32;
+        // Number of completions that actually disarm an operation. Multishot
+        // accept/recv stay armed in the kernel across completions; their
+        // intermediate CQEs carry `IORING_CQE_F_MORE`, meaning more
+        // completions for the same SQE will still arrive. Those must NOT be
+        // counted against `in_flight` — otherwise `wait()`'s `min_complete`
+        // heuristic would drop to 0 after the first one and return immediately
+        // instead of blocking for the next completion. Only the final CQE (no
+        // MORE bit) disarms the op and is subtracted from `in_flight`.
+        let mut dec = 0u32;
         let mut pbuf_returns = 0u16;
 
         loop {
@@ -781,12 +791,16 @@ impl Backend for UringBackend {
             results.push(TorusResult::new(cqe.res as i64, cqe.user_data));
             count += 1;
 
+            if (cqe.flags & tpt_torus_sys::cqe_flags::IORING_CQE_F_MORE) == 0 {
+                dec += 1;
+            }
+
             unsafe {
                 (*self.cq_ring.head).store(head.wrapping_add(1), Ordering::Release);
             }
         }
 
-        self.in_flight.fetch_sub(count, Ordering::Relaxed);
+        self.in_flight.fetch_sub(dec, Ordering::Relaxed);
 
         if pbuf_returns > 0 {
             if let Some(pb) = self.pbuf.lock().unwrap().as_ref() {

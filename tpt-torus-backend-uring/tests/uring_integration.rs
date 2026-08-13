@@ -231,27 +231,30 @@ fn test_multi_shot_recv_yields_multiple_completions() {
     let n1 = results[0].bytes().expect("missing byte count");
     assert_eq!(&buf[..n1], b"first!");
 
-    // Let the client send the second chunk only now, then reap without
-    // resubmitting — proves the op is still armed from the one submission.
-    //
-    // Note: `reap()` decrements `in_flight` back to 0 after the first
-    // completion above, so `wait()`'s `min_complete` would be 0 here and it
-    // would return immediately instead of blocking for the second
-    // completion. Poll `reap()` directly instead of relying on `wait()`.
+    // The multishot op is still armed, so `in_flight` must stay non-zero even
+    // though one completion was already reaped. (This is the bug the fix
+    // addresses: previously `reap()` dropped `in_flight` to 0 after the first
+    // completion, making `wait()`'s `min_complete` heuristic return 0 and bail
+    // immediately instead of blocking for the next completion.)
+    assert_eq!(backend.in_flight(), 1);
+
+    // Let the client send the second chunk only now, then wait for the next
+    // completion without resubmitting — proves the op is still armed and that
+    // `wait()` now blocks correctly (min_complete=1) for the armed multishot op.
     tx_go.send(()).expect("sync send failed");
+    backend.wait(5_000_000).expect("wait 2 failed");
     let mut results = Vec::new();
-    for _ in 0..500 {
-        backend.reap(&mut results).expect("reap 2 failed");
-        if !results.is_empty() {
-            break;
-        }
-        thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert_eq!(results.len(), 1, "second completion never arrived");
-    assert!(results[0].is_ok(), "recv 2 failed: {}", results[0].raw());
-    assert_eq!(results[0].user_data, 99);
-    let n2 = results[0].bytes().expect("missing byte count");
-    assert_eq!(&buf[..n2], b"second");
+    backend.reap(&mut results).expect("reap 2 failed");
+    // The peer's socket closes when the client thread returns, so the kernel
+    // may have also queued an EOF completion (`res == 0`, no MORE bit) during
+    // the wait. Assert that the "second" payload arrived rather than requiring
+    // exactly one completion.
+    let got_second = results.iter().any(|r| {
+        r.is_ok()
+            && r.user_data == 99
+            && r.bytes().map_or(false, |n| n > 0 && &buf[..n] == b"second")
+    });
+    assert!(got_second, "second completion never arrived");
 
     rx_done.recv().expect("client join signal failed");
     client.join().expect("client thread panicked");

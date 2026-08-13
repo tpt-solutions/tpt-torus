@@ -52,5 +52,5 @@ Fuzzing (FFI/parsing boundary): `cargo fuzz run <target>` from `fuzz/` (targets:
 
 ## Known open issues worth knowing
 
-- `UringBackend::wait` `min_complete` heuristic breaks after the first multishot completion (see `todo.md` Platform Review Follow-ups) — multishot tests poll `reap()` directly.
+- `UringBackend::wait` `min_complete` heuristic is fixed: `reap()` now only decrements `in_flight` for disarming CQEs (`IORING_CQE_F_MORE` clear), so armed multishot accept/recv keep `in_flight > 0` and `wait()` blocks correctly for the next completion.
 - `async_api.rs` futures still busy-repoll instead of registering wakers.
