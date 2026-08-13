@@ -6,7 +6,8 @@ use tpt_torus_core::flow::Flow;
 use tpt_torus_core::operation::Operation;
 use tpt_torus_core::result::Result as TorusResult;
 use tpt_torus_sys::{
-    io_uring_cqe, io_uring_params, io_uring_sqe, ioprio_flags, opcodes, queue_exit, queue_init,
+    io_uring_cqe, io_uring_params, io_uring_sqe, ioprio_flags, mmap_offsets, opcodes, queue_exit,
+    queue_init,
 };
 
 use std::collections::HashMap;
@@ -106,7 +107,7 @@ impl UringBackend {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
                 fd,
-                0, // SQ ring offset is always 0
+                mmap_offsets::IORING_OFF_SQ_RING,
             )
         };
         if sq_ring_ptr == libc::MAP_FAILED {
@@ -129,8 +130,6 @@ impl UringBackend {
         // mmap SQE array
         let sqe_array_size = (sq_entries as usize) * std::mem::size_of::<io_uring_sqe>();
         let sqe_array_size = (sqe_array_size + page_size - 1) & !(page_size - 1);
-        let sqe_array_offset =
-            (params.sq_off.array as usize) + (sq_entries as usize) * std::mem::size_of::<u32>();
 
         let sqe_array_ptr = unsafe {
             libc::mmap(
@@ -139,7 +138,7 @@ impl UringBackend {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
                 fd,
-                sqe_array_offset as libc::off_t,
+                mmap_offsets::IORING_OFF_SQES,
             )
         };
         if sqe_array_ptr == libc::MAP_FAILED {
@@ -159,7 +158,7 @@ impl UringBackend {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
                 fd,
-                0, // CQ ring offset (on single-mmap kernels this is same as SQ)
+                mmap_offsets::IORING_OFF_CQ_RING,
             )
         };
         if cq_ring_ptr == libc::MAP_FAILED {

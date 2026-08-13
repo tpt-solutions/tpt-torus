@@ -110,6 +110,12 @@ struct IoUringRing {
 unsafe impl Send for IoUringRing {}
 unsafe impl Sync for IoUringRing {}
 
+/// Magic offsets passed to `mmap(2)` on the io_uring fd to reach each region.
+/// These are fixed kernel ABI constants, not derived from `io_uring_params`.
+const IORING_OFF_SQ_RING: libc::off_t = 0;
+const IORING_OFF_CQ_RING: libc::off_t = 0x8000000;
+const IORING_OFF_SQES: libc::off_t = 0x10000000;
+
 impl IoUringRing {
     /// Create an io_uring ring by mmap'ing the kernel shared memory.
     fn new(fd: i32, params: &libc::io_uring_params) -> HwResult<Self> {
@@ -127,7 +133,7 @@ impl IoUringRing {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
                 fd,
-                0,
+                IORING_OFF_SQ_RING,
             )
         };
         if sq_ring_ptr == libc::MAP_FAILED {
@@ -137,8 +143,6 @@ impl IoUringRing {
         // mmap SQE array
         let sqe_size = params.sq_entries as usize * std::mem::size_of::<IoUringSqe>();
         let sqe_size = (sqe_size + page_size - 1) & !(page_size - 1);
-        let sqe_offset =
-            params.sq_off.array as usize + params.sq_entries as usize * std::mem::size_of::<u32>();
 
         let sqe_ptr = unsafe {
             libc::mmap(
@@ -147,7 +151,7 @@ impl IoUringRing {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
                 fd,
-                sqe_offset as libc::off_t,
+                IORING_OFF_SQES,
             )
         };
         if sqe_ptr == libc::MAP_FAILED {
@@ -169,7 +173,7 @@ impl IoUringRing {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
                 fd,
-                0,
+                IORING_OFF_CQ_RING,
             )
         };
         if cq_ring_ptr == libc::MAP_FAILED {

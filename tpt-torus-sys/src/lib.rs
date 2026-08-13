@@ -155,6 +155,16 @@ pub mod ioprio_flags {
     pub const IORING_RECV_MULTISHOT: u16 = 1 << 1;
 }
 
+// ─── mmap Offsets ──────────────────────────────────────────────────────────
+
+/// Magic offsets passed to `mmap(2)` on the io_uring fd to reach each region.
+/// These are fixed kernel ABI constants, not derived from `io_uring_params`.
+pub mod mmap_offsets {
+    pub const IORING_OFF_SQ_RING: libc::off_t = 0;
+    pub const IORING_OFF_CQ_RING: libc::off_t = 0x8000000;
+    pub const IORING_OFF_SQES: libc::off_t = 0x10000000;
+}
+
 // ─── Setup Flags ───────────────────────────────────────────────────────────
 
 /// Flags for `io_uring_params::flags`.
