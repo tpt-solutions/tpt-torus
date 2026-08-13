@@ -361,7 +361,12 @@ impl GpuDirectNvme {
     pub fn new(nvme_path: &str, ns_id: u32) -> HwResult<Self> {
         const DEFAULT_POOL_BUF_SIZE: usize = 64 * 1024;
         const DEFAULT_POOL_CAPACITY: usize = 64;
-        Self::with_pool(nvme_path, ns_id, DEFAULT_POOL_BUF_SIZE, DEFAULT_POOL_CAPACITY)
+        Self::with_pool(
+            nvme_path,
+            ns_id,
+            DEFAULT_POOL_BUF_SIZE,
+            DEFAULT_POOL_CAPACITY,
+        )
     }
 
     /// Create a new GPU-Direct NVMe driver with explicit pool sizing.
