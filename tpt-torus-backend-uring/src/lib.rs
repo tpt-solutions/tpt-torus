@@ -407,7 +407,7 @@ impl UringBackend {
 
         // The buffer ring size must be a power of two; round up so there are
         // enough buffers for the requested completions.
-        let entries = (nbufs.max(2)).next_power_of_two() as usize;
+        let entries = (nbufs.max(2)).next_power_of_two();
         let ring_bytes = entries * std::mem::size_of::<io_uring_buf>();
 
         let mmap = unsafe {
@@ -761,6 +761,7 @@ impl Backend for UringBackend {
     fn reap(&self, results: &mut Vec<TorusResult>) -> tpt_torus_core::error::Result<usize> {
         let mask = self.cq_ring.mask();
         let mut count = 0u32;
+        let mut pbuf_returns = 0u16;
 
         loop {
             let head = unsafe { (*self.cq_ring.head).load(Ordering::Acquire) };
@@ -773,6 +774,10 @@ impl Backend for UringBackend {
             let index = (head & mask) as usize;
             let cqe = unsafe { &*self.cqes.add(index) };
 
+            if (cqe.flags & tpt_torus_sys::cqe_flags::IORING_CQE_F_BUFFER) != 0 && cqe.res >= 0 {
+                pbuf_returns = pbuf_returns.wrapping_add(1);
+            }
+
             results.push(TorusResult::new(cqe.res as i64, cqe.user_data));
             count += 1;
 
@@ -782,6 +787,18 @@ impl Backend for UringBackend {
         }
 
         self.in_flight.fetch_sub(count, Ordering::Relaxed);
+
+        if pbuf_returns > 0 {
+            if let Some(pb) = self.pbuf.lock().unwrap().as_ref() {
+                unsafe {
+                    let bufs = pb.mmap as *mut io_uring_buf;
+                    let tail = (*bufs).resv;
+                    (*bufs).resv = tail.wrapping_add(pbuf_returns);
+                    fence(Ordering::Release);
+                }
+            }
+        }
+
         Ok(count as usize)
     }
 
