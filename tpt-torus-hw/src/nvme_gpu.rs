@@ -33,9 +33,6 @@ const IORING_OP_WRITE_FIXED: u8 = 29;
 /// io_uring SQE flag for fixed buffers.
 const IOSQE_FIXED_FILE: u8 = 1 << 0;
 
-/// io_uring CQE flag for buffer selection.
-const IORING_CQE_F_BUFFER: u32 = 1 << 0;
-
 // ─── NVMe Device ───────────────────────────────────────────────────────────
 
 /// Handle to an NVMe device for direct I/O.
@@ -85,12 +82,60 @@ impl NvmeDevice {
     pub fn name(&self) -> &str {
         &self.name
     }
+    /// Total number of addressable blocks (0 until queried from the device).
+    pub fn total_blocks(&self) -> u64 {
+        self.total_blocks
+    }
 }
 
 impl Drop for NvmeDevice {
     fn drop(&mut self) {
         unsafe {
             libc::close(self.fd);
+        }
+    }
+}
+
+// ─── NVMe Passthrough Command ──────────────────────────────────────────────
+
+/// NVMe passthrough command built for a raw io_uring NVMe submission.
+///
+/// Fields mirror the NVMe command dwords used by an `NVME_IOCTL_SUBMIT_IO`
+/// style submission: `cdw12` carries the (0-based) block count, `cdw14`/`cdw15`
+/// carry the starting LBA.
+pub struct NvmePassthroughCmd {
+    /// NVMe opcode (`0x02` read, `0x01` write).
+    pub opcode: u8,
+    /// Namespace identifier.
+    pub ns_id: u32,
+    /// Command Dword 12 (NLB is 0-based: `num_blocks - 1`).
+    pub cdw12: u32,
+    /// Command Dword 14 (low 32 bits of the starting LBA).
+    pub cdw14: u32,
+    /// Command Dword 15 (high 32 bits of the starting LBA).
+    pub cdw15: u32,
+}
+
+impl NvmePassthroughCmd {
+    /// Build a read command for `num_blocks` starting at `lba`.
+    pub fn read(lba: u64, num_blocks: u32, ns_id: u32) -> Self {
+        Self {
+            opcode: 0x02,
+            ns_id,
+            cdw12: num_blocks - 1,
+            cdw14: (lba & 0xFFFF_FFFF) as u32,
+            cdw15: (lba >> 32) as u32,
+        }
+    }
+
+    /// Build a write command for `num_blocks` starting at `lba`.
+    pub fn write(lba: u64, num_blocks: u32, ns_id: u32) -> Self {
+        Self {
+            opcode: 0x01,
+            ns_id,
+            cdw12: num_blocks - 1,
+            cdw14: (lba & 0xFFFF_FFFF) as u32,
+            cdw15: (lba >> 32) as u32,
         }
     }
 }
@@ -205,6 +250,7 @@ impl IoUringRing {
     unsafe fn submit_sqe(&self, sqe: &IoUringSqe) {
         let tail = std::ptr::read_volatile(self.tail);
         let index = (tail & self.ring_mask) as usize;
+        debug_assert!(index < self.ring_entries as usize);
         ptr::copy_nonoverlapping(sqe, self.sqe_array.add(index), 1);
         std::ptr::write_volatile(self.tail, tail.wrapping_add(1));
     }
@@ -239,7 +285,7 @@ impl Drop for IoUringRing {
 
 /// Tracks pending NVMe operations and their completions.
 struct CompletionTracker {
-    /// Map from user_data to (pool buffer index, GPU buf ptr, gpu offset, lba, num_blocks, is_write).
+    /// Map from user_data to (pool buffer index, GPU buf ptr, gpu offset, num_blocks, is_write).
     pending: std::collections::HashMap<u64, PendingOp>,
     next_id: AtomicU64,
 }
@@ -248,7 +294,6 @@ struct PendingOp {
     pool_index: u32,
     gpu_ptr: u64,
     gpu_offset: usize,
-    lba: u64,
     num_blocks: u32,
     is_write: bool,
     pool_buf_addr: u64,
@@ -289,7 +334,7 @@ impl CompletionTracker {
 /// ```text
 /// NVMe ──[io_uring READ]──► DMA Pool Buffer ──[CUDA H2D]──► GPU VRAM
 /// ```
-pub struct GpuDirectNvmeDriver {
+pub struct GpuDirectNvme {
     /// NVMe device handle.
     nvme: NvmeDevice,
     /// io_uring ring for submissions.
@@ -304,18 +349,29 @@ pub struct GpuDirectNvmeDriver {
     tracker: std::sync::Mutex<CompletionTracker>,
 }
 
-unsafe impl Send for GpuDirectNvmeDriver {}
-unsafe impl Sync for GpuDirectNvmeDriver {}
+unsafe impl Send for GpuDirectNvme {}
+unsafe impl Sync for GpuDirectNvme {}
 
-impl GpuDirectNvmeDriver {
-    /// Create a new GPU-Direct NVMe driver.
+impl GpuDirectNvme {
+    /// Create a new GPU-Direct NVMe driver with default pool sizing.
+    ///
+    /// # Arguments
+    /// - `nvme_path`: Path to the NVMe block device (e.g., `/dev/nvme0n1`).
+    /// - `ns_id`: NVMe namespace ID.
+    pub fn new(nvme_path: &str, ns_id: u32) -> HwResult<Self> {
+        const DEFAULT_POOL_BUF_SIZE: usize = 64 * 1024;
+        const DEFAULT_POOL_CAPACITY: usize = 64;
+        Self::with_pool(nvme_path, ns_id, DEFAULT_POOL_BUF_SIZE, DEFAULT_POOL_CAPACITY)
+    }
+
+    /// Create a new GPU-Direct NVMe driver with explicit pool sizing.
     ///
     /// # Arguments
     /// - `nvme_path`: Path to the NVMe block device (e.g., `/dev/nvme0n1`).
     /// - `ns_id`: NVMe namespace ID.
     /// - `pool_buf_size`: Size of each DMA pool buffer (must be power of 2).
     /// - `pool_capacity`: Number of buffers in the DMA pool.
-    pub fn new(
+    pub fn with_pool(
         nvme_path: &str,
         ns_id: u32,
         pool_buf_size: usize,
@@ -392,7 +448,6 @@ impl GpuDirectNvmeDriver {
                     pool_index: pool_buf.index(),
                     gpu_ptr: gpu_buf.dev_ptr,
                     gpu_offset,
-                    lba,
                     num_blocks,
                     is_write: false,
                     pool_buf_addr: pool_buf.addr(),
@@ -474,7 +529,6 @@ impl GpuDirectNvmeDriver {
                     pool_index: pool_buf.index(),
                     gpu_ptr: gpu_buf.dev_ptr,
                     gpu_offset,
-                    lba,
                     num_blocks,
                     is_write: true,
                     pool_buf_addr: pool_buf.addr(),
@@ -661,7 +715,7 @@ impl GpuDirectNvmeDriver {
     }
 }
 
-impl Drop for GpuDirectNvmeDriver {
+impl Drop for GpuDirectNvme {
     fn drop(&mut self) {
         crate::cuda::stream_destroy(self.stream).ok();
         // IoUringRing and NvmeDevice drop automatically
@@ -723,7 +777,6 @@ mod tests {
                 pool_index: 0,
                 gpu_ptr: 0x1000,
                 gpu_offset: 0,
-                lba: 0,
                 num_blocks: 8,
                 is_write: false,
                 pool_buf_addr: 0x2000,

@@ -355,6 +355,48 @@ pub fn ctx_create(device: CUdevice) -> Result<CUcontext, crate::HwError> {
     }
 }
 
+/// Destroy a CUDA context.
+pub fn ctx_destroy(ctx: CUcontext) -> Result<(), crate::HwError> {
+    let api = load_cuda()?;
+    let result = unsafe { (api.cuCtxDestroy)(ctx) };
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxDestroy: {}",
+            result
+        )))
+    }
+}
+
+/// Set the current CUDA context.
+pub fn ctx_set_current(ctx: CUcontext) -> Result<(), crate::HwError> {
+    let api = load_cuda()?;
+    let result = unsafe { (api.cuCtxSetCurrent)(ctx) };
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxSetCurrent: {}",
+            result
+        )))
+    }
+}
+
+/// Synchronize the current CUDA context.
+pub fn ctx_synchronize() -> Result<(), crate::HwError> {
+    let api = load_cuda()?;
+    let result = unsafe { (api.cuCtxSynchronize)() };
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxSynchronize: {}",
+            result
+        )))
+    }
+}
+
 /// Allocate device memory.
 pub fn mem_alloc(size: usize) -> Result<CUdeviceptr, crate::HwError> {
     let api = load_cuda()?;

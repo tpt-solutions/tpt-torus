@@ -520,10 +520,14 @@ impl BufferHandle {
 
 /// Builder for creating `ZeroCopyDmaPool` instances.
 pub struct DmaPoolBuilder {
-    buf_size: usize,
-    capacity: usize,
-    uring_fd: i32,
-    use_hugepages: bool,
+    /// Size of each buffer (must be power of 2, 4KB-2MB).
+    pub buf_size: usize,
+    /// Number of buffers in the pool.
+    pub capacity: usize,
+    /// io_uring file descriptor used for buffer registration.
+    pub uring_fd: i32,
+    /// Whether to allocate buffers from huge pages.
+    pub use_hugepages: bool,
 }
 
 impl DmaPoolBuilder {
@@ -607,6 +611,11 @@ impl GpuDmaPool {
     /// Access the underlying pool.
     pub fn pool(&self) -> &ZeroCopyDmaPool {
         &self.pool
+    }
+
+    /// GPU device ID this pool is associated with.
+    pub fn device_id(&self) -> i32 {
+        self.device_id
     }
 }
 

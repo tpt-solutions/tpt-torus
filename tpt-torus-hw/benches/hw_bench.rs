@@ -76,7 +76,7 @@ fn bench_dma_pool(c: &mut Criterion) {
 /// Benchmark: GPU-Direct buffer and entry creation.
 #[cfg(feature = "gpu_direct")]
 fn bench_gpu_direct(c: &mut Criterion) {
-    use tpt_torus_hw::gpu_direct::{DmaEntry, GpuBuffer, TransferDirection};
+    use tpt_torus_hw::gpu_direct::{DmaEntry, GpuBuffer};
 
     let mut group = c.benchmark_group("gpu_direct");
 

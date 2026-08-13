@@ -13,7 +13,7 @@ runtime-loaded native integration. Language bindings (Rust/Go/Python) are in pla
 See `todo.md` for detailed progress.
 
 - 42 tests passing across 7 crates
-- Zero-cost abstraction verified via benchmarks (~700ps Flow creation, ~235ps Result inspection)
+- Zero-cost abstraction verified via benchmarks (~816ps Flow creation, ~272ps Result inspection)
 - Cross-platform: Linux (io_uring), Windows (IOCP), macOS/BSD (kqueue)
 - `spdk` / `dpdk` features load `libspdk` / `libdpdk` at runtime and call the real
   NVMe / poll-mode I/O APIs; operations degrade gracefully to `NotAvailable` when
@@ -153,16 +153,38 @@ gd.sync_all()?;
 
 ## Benchmarks
 
-Verified zero-cost abstraction:
+Micro-benchmarks of the **core API overhead** — `Flow`/`Result` construction,
+ring-buffer atomics, lease registry, and resource limiter. These verify the
+*zero-cost abstraction* claim: they are backend-agnostic and measure only the
+Rust API path, not OS I/O throughput.
 
-| Operation | Time |
-|-----------|------|
-| Flow creation | ~700 ps |
-| Result inspection | ~235 ps |
-| Ring publish (atomic) | ~4 ns |
-| Ring available check | ~620 ps |
-| Lease verify | ~15 ns |
-| Resource limiter check | ~0.5 ns |
+Measured 2026-08-14 on Windows 11 / x64 (`cargo bench -p tpt-torus-core`,
+criterion, 100 samples). Means shown (lower = faster):
+
+| Group | Operation | Mean |
+|-------|-----------|------|
+| flow_creation | flow_new_read | 816 ps |
+| flow_creation | flow_new_write | 835 ps |
+| flow_creation | flow_with_user_data | 886 ps |
+| result_inspection | result_new | 272 ps |
+| result_inspection | result_is_ok | 135 ps |
+| result_inspection | result_bytes | 285 ps |
+| result_inspection | result_error | 273 ps |
+| torus_overhead | flow_creation_to_submit_path | 147 ps |
+| ring_operations | sq_publish | 4.51 ns |
+| ring_operations | sq_free_slots | 795 ps |
+| ring_operations | cq_available | 715 ps |
+| ring_operations | cq_consume | 1.02 ns |
+| lease_operations | register | 60.7 ns |
+| lease_operations | checkout_checkin | 29.4 ns |
+| lease_operations | verify | 17.6 ns |
+| resource_limiter | try_reserve | 12.9 ns |
+| resource_limiter | can_submit | 727 ps |
+
+> Note: these numbers are API-overhead micro-benchmarks, not end-to-end I/O
+> throughput. They do not compare against `tokio`/`epoll`/IOCP directly — for a
+> "what did this replace" comparison you would benchmark the submit→wait→reap
+> loop against a tokio runtime (see `examples/tokio_usage.rs`).
 
 Run benchmarks: `cargo bench -p tpt-torus-core`
 
