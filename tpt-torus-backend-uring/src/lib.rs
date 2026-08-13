@@ -105,7 +105,7 @@ impl UringBackend {
                 ptr::null_mut(),
                 sq_ring_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
                 mmap_offsets::IORING_OFF_SQ_RING,
             )
@@ -136,7 +136,7 @@ impl UringBackend {
                 ptr::null_mut(),
                 sqe_array_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
                 mmap_offsets::IORING_OFF_SQES,
             )
@@ -156,7 +156,7 @@ impl UringBackend {
                 ptr::null_mut(),
                 cq_ring_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
                 mmap_offsets::IORING_OFF_CQ_RING,
             )

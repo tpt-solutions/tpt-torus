@@ -19,7 +19,8 @@ pub(crate) struct io_uring_sqe {
     pub buf_group: u16,
     pub personality: u16,
     pub splice_fd_in: i32,
-    pub __pad2: [u32; 2],
+    pub addr3: u64,
+    pub __pad2: u64,
 }
 
 /// Raw completion queue entry layout matching the kernel struct.

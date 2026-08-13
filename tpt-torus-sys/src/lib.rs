@@ -8,6 +8,11 @@ use std::os::raw::{c_int, c_uint, c_void};
 // ─── Submission Queue Entry (io_uring_sqe) ─────────────────────────────────
 
 /// Raw io_uring submission queue entry.
+///
+/// Must be exactly 64 bytes and match the kernel's `struct io_uring_sqe`
+/// field-for-field. The trailing padding is part of the ABI: the kernel
+/// indexes the SQE array as `base + index * 64`, so getting the size wrong
+/// misaligns every entry past index 0 and corrupts submissions.
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct io_uring_sqe {
@@ -23,8 +28,11 @@ pub struct io_uring_sqe {
     pub buf_group: u16,
     pub personality: u16,
     pub splice_fd_in: i32,
-    pub __pad2: [u32; 2],
+    pub addr3: u64,
+    pub __pad2: u64,
 }
+
+const _: () = assert!(std::mem::size_of::<io_uring_sqe>() == 64);
 
 // ─── Completion Queue Entry (io_uring_cqe) ─────────────────────────────────
 

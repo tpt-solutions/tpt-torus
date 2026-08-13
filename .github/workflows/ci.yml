@@ -62,7 +62,11 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage report
-        run: cargo tarpaulin --workspace --skip-clean --out xml --output-dir coverage
+        # Use the LLVM coverage engine (compiler instrumentation) instead of the
+        # default Ptrace backend. io_uring's mmap of the SQE array at the magic
+        # high offset fails when the test process is being ptrace'd, which makes
+        # every uring-backed test panic with "failed to mmap SQE array".
+        run: cargo tarpaulin --workspace --skip-clean --out xml --output-dir coverage --engine llvm
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

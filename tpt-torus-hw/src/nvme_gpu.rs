@@ -131,7 +131,7 @@ impl IoUringRing {
                 ptr::null_mut(),
                 sq_ring_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
                 IORING_OFF_SQ_RING,
             )
@@ -149,7 +149,7 @@ impl IoUringRing {
                 ptr::null_mut(),
                 sqe_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
                 IORING_OFF_SQES,
             )
@@ -171,7 +171,7 @@ impl IoUringRing {
                 ptr::null_mut(),
                 cq_ring_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
                 IORING_OFF_CQ_RING,
             )
@@ -413,7 +413,8 @@ impl GpuDirectNvmeDriver {
             buf_group: pool_buf.registered_index(),
             personality: 0,
             splice_fd_in: 0,
-            __pad2: [0; 2],
+            addr3: 0,
+            __pad2: 0,
         };
 
         unsafe {
@@ -496,7 +497,8 @@ impl GpuDirectNvmeDriver {
             buf_group: pool_buf.registered_index(),
             personality: 0,
             splice_fd_in: 0,
-            __pad2: [0; 2],
+            addr3: 0,
+            __pad2: 0,
         };
 
         unsafe {
@@ -687,8 +689,11 @@ pub struct IoUringSqe {
     pub buf_group: u16,
     pub personality: u16,
     pub splice_fd_in: i32,
-    pub __pad2: [u32; 2],
+    pub addr3: u64,
+    pub __pad2: u64,
 }
+
+const _: () = assert!(std::mem::size_of::<IoUringSqe>() == 64);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]

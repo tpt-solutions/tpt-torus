@@ -156,6 +156,22 @@ fn test_batch_submit() {
     std::fs::remove_file(&tmpfile).ok();
 }
 
+/// `IORING_OP_RECV` multishot (`IORING_RECV_MULTISHOT`) was added in Linux
+/// 5.20. Older kernels reject the submission with `-EINVAL`, so skip the test
+/// there — it verifies a feature the running kernel can't exercise.
+fn kernel_supports_recv_multishot() -> bool {
+    if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        let mut it = release.trim().split('.');
+        let major = it.next().and_then(|s| s.parse::<u32>().ok());
+        let minor = it.next().and_then(|s| s.parse::<u32>().ok());
+        if let (Some(major), Some(minor)) = (major, minor) {
+            return (major, minor) >= (5, 20);
+        }
+    }
+    // If we can't determine the version, assume support so the test still runs.
+    true
+}
+
 /// Proves `submit_multi_recv` actually arms io_uring's multishot mode: a
 /// single submission must yield more than one completion as separate reads
 /// arrive on the same socket, without the caller re-submitting recv in
@@ -164,6 +180,14 @@ fn test_batch_submit() {
 /// silently fell back to one-shot behavior.
 #[test]
 fn test_multi_shot_recv_yields_multiple_completions() {
+    if !kernel_supports_recv_multishot() {
+        eprintln!(
+            "skipping test_multi_shot_recv_yields_multiple_completions: \
+             kernel < 5.20 lacks IORING_RECV_MULTISHOT"
+        );
+        return;
+    }
+
     use std::io::Write;
     use std::net::{TcpListener, TcpStream};
     use std::os::unix::io::AsRawFd;
