@@ -45,6 +45,47 @@ pub struct io_uring_cqe {
     pub flags: u32,
 }
 
+// ─── Provided buffer ring (multishot recv) ────────────────────────────────
+
+/// A single entry in a provided-buffer ring.
+///
+/// Must be exactly 16 bytes and lay out as the kernel's `struct io_uring_buf`:
+/// the kernel reads `addr`/`len` to copy received data, and reports `bid` back
+/// to userspace in the upper bits of `io_uring_cqe::flags`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct io_uring_buf {
+    pub addr: u64,
+    pub len: u32,
+    pub bid: u16,
+    pub resv: u16,
+}
+
+const _: () = assert!(std::mem::size_of::<io_uring_buf>() == 16);
+
+/// Argument for `IORING_REGISTER_PBUF_RING` / `IORING_UNREGISTER_PBUF_RING`.
+///
+/// `ring_addr` points at the userspace-allocated ring buffer (an array of
+/// `io_uring_buf` preceded by a 16-byte header whose tail counter the kernel
+/// reads). `ring_entries` must be a power of two. `bgid` is the buffer group
+/// id referenced from `io_uring_sqe::buf_group` with `IOSQE_BUFFER_SELECT`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct io_uring_buf_reg {
+    pub ring_addr: u64,
+    pub ring_entries: u32,
+    pub bgid: u16,
+    pub flags: u16,
+    pub min_left: u32,
+    pub resv: [u32; 5],
+}
+
+const _: () = assert!(std::mem::size_of::<io_uring_buf_reg>() == 40);
+
+/// io_uring_register opcodes for provided-buffer rings.
+pub const IORING_REGISTER_PBUF_RING: u32 = 22;
+pub const IORING_UNREGISTER_PBUF_RING: u32 = 23;
+
 // ─── Setup Parameters ──────────────────────────────────────────────────────
 
 /// Parameters for `io_uring_setup`.

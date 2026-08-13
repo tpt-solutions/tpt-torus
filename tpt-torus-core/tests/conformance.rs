@@ -29,7 +29,7 @@ fn create_backend() -> Box<dyn Backend> {
     #[cfg(target_os = "macos")]
     {
         Box::new(
-            tpt_torus_backend_kqueue::KqueueBackend::new(256)
+            tpt_torus_backend_kqueue::KqueueBackend::new()
                 .expect("failed to create kqueue backend"),
         )
     }

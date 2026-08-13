@@ -6,8 +6,9 @@ use tpt_torus_core::flow::Flow;
 use tpt_torus_core::operation::Operation;
 use tpt_torus_core::result::Result as TorusResult;
 use tpt_torus_sys::{
-    io_uring_cqe, io_uring_params, io_uring_sqe, ioprio_flags, mmap_offsets, opcodes, queue_exit,
-    queue_init,
+    io_uring_buf, io_uring_buf_reg, io_uring_cqe, io_uring_params, io_uring_sqe, ioprio_flags,
+    mmap_offsets, opcodes, queue_exit, queue_init, sqe_flags, IORING_REGISTER_PBUF_RING,
+    IORING_UNREGISTER_PBUF_RING,
 };
 
 use std::collections::HashMap;
@@ -43,6 +44,16 @@ impl Drop for MmapRing {
     }
 }
 
+/// A registered provided-buffer ring used to back multishot recv.
+///
+/// Raw pointer is owned by the backend and released on `Drop`. The backend is
+/// already `Send + Sync` via `unsafe impl`s; the pointer lives behind a `Mutex`.
+struct ProvidedBuffers {
+    mmap: *mut libc::c_void,
+    len: usize,
+    bgid: u16,
+}
+
 /// Backend that maps the Virtual Torus rings directly to io_uring kernel shared memory.
 pub struct UringBackend {
     fd: i32,
@@ -60,6 +71,8 @@ pub struct UringBackend {
     /// Maps a registered buffer's base address to its io_uring buffer index,
     /// enabling `IORING_OP_*_FIXED` zero-copy I/O.
     registered: Mutex<HashMap<u64, u32>>,
+    /// Provided-buffer ring backing multishot recv (registered lazily).
+    pbuf: Mutex<Option<ProvidedBuffers>>,
 }
 
 unsafe impl Send for UringBackend {}
@@ -190,6 +203,7 @@ impl UringBackend {
             cqes_len,
             in_flight: AtomicU32::new(0),
             registered: Mutex::new(HashMap::new()),
+            pbuf: Mutex::new(None),
         })
     }
 
@@ -317,14 +331,25 @@ impl UringBackend {
     /// Submit a multi-shot recv operation.
     ///
     /// Stays active after each completion, delivering received data for every
-    /// incoming message without re-submitting.
+    /// incoming message without re-submitting. Multishot recv requires a
+    /// provided-buffer pool (`IOSQE_BUFFER_SELECT` + a registered buffer group);
+    /// the kernel selects a buffer per completion and writes the data into it,
+    /// so `buf` is used as the backing store for the pool rather than being
+    /// referenced directly by the SQE. `len` must therefore be 0 on the SQE.
+    ///
+    /// `nbufs` is the number of provided buffers to register (each `buf_len`
+    /// bytes); it must be at least the number of completions expected before
+    /// the pool would be exhausted.
     pub fn submit_multi_recv(
         &self,
         fd: i32,
         buf: *mut u8,
-        len: usize,
+        buf_len: usize,
+        nbufs: usize,
         user_data: u64,
     ) -> tpt_torus_core::error::Result<()> {
+        let bgid = self.ensure_pbuf_ring(buf, buf_len, nbufs)?;
+
         let tail = unsafe { (*self.sq_ring.tail).load(Ordering::Acquire) };
         let head = unsafe { (*self.sq_ring.head).load(Ordering::Acquire) };
         let mask = self.sq_ring.mask();
@@ -340,11 +365,16 @@ impl UringBackend {
 
         sqe.opcode = opcodes::IORING_OP_RECV;
         sqe.fd = fd;
-        sqe.addr_splice_off_in = buf as u64;
-        sqe.len = len as u32;
+        // Multishot recv uses a kernel-selected provided buffer, so addr/len on
+        // the SQE are ignored and `len` must be 0 — a non-zero `len` is
+        // rejected by the kernel with -EINVAL.
+        sqe.addr_splice_off_in = 0;
+        sqe.len = 0;
         // Multi-shot: keep the operation armed across completions. This bit
         // lives in `ioprio`, not `op_flags` (which holds recv() MSG_* flags).
         sqe.ioprio = ioprio_flags::IORING_RECV_MULTISHOT;
+        sqe.buf_group = bgid;
+        sqe.flags |= sqe_flags::IOSQE_BUFFER_SELECT;
         sqe.user_data = user_data;
 
         unsafe {
@@ -360,6 +390,87 @@ impl UringBackend {
             self.in_flight.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
+    }
+
+    /// Lazily register a provided-buffer ring backed by `buf`, returning the
+    /// buffer group id to use. The ring is registered once and reused.
+    fn ensure_pbuf_ring(
+        &self,
+        buf: *mut u8,
+        buf_len: usize,
+        nbufs: usize,
+    ) -> tpt_torus_core::error::Result<u16> {
+        let mut guard = self.pbuf.lock().unwrap();
+        if let Some(existing) = guard.as_ref() {
+            return Ok(existing.bgid);
+        }
+
+        // The buffer ring size must be a power of two; round up so there are
+        // enough buffers for the requested completions.
+        let entries = (nbufs.max(2)).next_power_of_two() as usize;
+        let ring_bytes = entries * std::mem::size_of::<io_uring_buf>();
+
+        let mmap = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                ring_bytes,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if mmap == libc::MAP_FAILED {
+            return Err(tpt_torus_core::error::Error::Os(libc::ENOMEM));
+        }
+
+        // The ring is laid out as a `io_uring_buf[]` array whose first element's
+        // `resv` field doubles as the kernel's `tail` counter (offset 0, same
+        // as `bufs[0]`). Initialize tail to 0, fill every slot aliased to
+        // `buf` so each completion lands at the start of `buf` regardless of the
+        // selected buffer id, then advance the tail to mark them all available.
+        let bufs = mmap as *mut io_uring_buf;
+        unsafe { (*bufs).resv = 0 };
+        for i in 0..entries {
+            unsafe {
+                *bufs.add(i) = io_uring_buf {
+                    addr: buf as u64,
+                    len: buf_len as u32,
+                    bid: i as u16,
+                    resv: 0,
+                };
+            }
+        }
+        unsafe { (*bufs).resv = entries as u16 };
+
+        let bgid: u16 = 0;
+        let reg = io_uring_buf_reg {
+            ring_addr: mmap as u64,
+            ring_entries: entries as u32,
+            bgid,
+            flags: 0,
+            min_left: 0,
+            resv: [0; 5],
+        };
+        let ret = unsafe {
+            tpt_torus_sys::io_uring_register(
+                self.fd,
+                IORING_REGISTER_PBUF_RING,
+                &reg as *const _ as *const std::ffi::c_void,
+                1,
+            )
+        };
+        if ret < 0 {
+            unsafe { libc::munmap(mmap, ring_bytes) };
+            return Err(tpt_torus_core::error::Error::Os(-ret as i32));
+        }
+
+        *guard = Some(ProvidedBuffers {
+            mmap,
+            len: ring_bytes,
+            bgid,
+        });
+        Ok(bgid)
     }
 
     /// Cancel a multi-shot operation by submitting an `IORING_OP_ASYNC_CANCEL`.
@@ -709,6 +820,25 @@ impl Backend for UringBackend {
 
 impl Drop for UringBackend {
     fn drop(&mut self) {
+        if let Some(pb) = self.pbuf.lock().unwrap().take() {
+            unsafe {
+                let reg = io_uring_buf_reg {
+                    ring_addr: 0,
+                    ring_entries: 0,
+                    bgid: pb.bgid,
+                    flags: 0,
+                    min_left: 0,
+                    resv: [0; 5],
+                };
+                tpt_torus_sys::io_uring_register(
+                    self.fd,
+                    IORING_UNREGISTER_PBUF_RING,
+                    &reg as *const _ as *const std::ffi::c_void,
+                    1,
+                );
+                libc::munmap(pb.mmap, pb.len);
+            }
+        }
         unsafe {
             libc::munmap(
                 self.sqe_array as *mut libc::c_void,

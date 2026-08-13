@@ -218,7 +218,7 @@ fn test_multi_shot_recv_yields_multiple_completions() {
 
     let mut buf = vec![0u8; 64];
     backend
-        .submit_multi_recv(fd, buf.as_mut_ptr(), buf.len(), 99)
+        .submit_multi_recv(fd, buf.as_mut_ptr(), buf.len(), 2, 99)
         .expect("submit_multi_recv failed");
 
     // First completion.
