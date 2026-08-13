@@ -265,11 +265,10 @@ impl ZeroCopyDmaPool {
         }
 
         let ret = unsafe {
-            libc::syscall(
-                libc::SYS_io_uring_register,
+            tpt_torus_sys::io_uring_register(
                 self.uring_fd,
                 IORING_REGISTER_BUFFERS,
-                iovecs.as_ptr(),
+                iovecs.as_ptr() as *const libc::c_void,
                 self.capacity,
             )
         };
@@ -295,8 +294,7 @@ impl ZeroCopyDmaPool {
         }
 
         let ret = unsafe {
-            libc::syscall(
-                libc::SYS_io_uring_register,
+            tpt_torus_sys::io_uring_register(
                 self.uring_fd,
                 IORING_UNREGISTER_BUFFERS,
                 ptr::null::<libc::c_void>(),

@@ -30,7 +30,7 @@
 
 #[cfg(feature = "gpu_direct")]
 pub mod cuda;
-#[cfg(all(unix, feature = "gpu_direct"))]
+#[cfg(all(target_os = "linux", feature = "gpu_direct"))]
 pub mod dma_pool;
 pub mod dpdk;
 #[cfg(feature = "gpu_direct")]

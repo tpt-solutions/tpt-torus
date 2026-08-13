@@ -15,10 +15,12 @@
 //!
 //! Both stages are async and can be pipelined for maximum throughput.
 
-use crate::dma_pool::{BufferHandle, ZeroCopyDmaPool};
+use crate::dma_pool::ZeroCopyDmaPool;
 use crate::gpu_direct::GpuBuffer;
 use crate::{HwError, HwResult};
+use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tpt_torus_sys::io_uring_params;
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -118,7 +120,7 @@ const IORING_OFF_SQES: libc::off_t = 0x10000000;
 
 impl IoUringRing {
     /// Create an io_uring ring by mmap'ing the kernel shared memory.
-    fn new(fd: i32, params: &libc::io_uring_params) -> HwResult<Self> {
+    fn new(fd: i32, params: &io_uring_params) -> HwResult<Self> {
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
 
         // mmap SQ ring
@@ -201,16 +203,16 @@ impl IoUringRing {
 
     /// Submit an SQE to the ring.
     unsafe fn submit_sqe(&self, sqe: &IoUringSqe) {
-        let tail = std::sync::atomic::read_volatile(self.tail);
+        let tail = std::ptr::read_volatile(self.tail);
         let index = (tail & self.ring_mask) as usize;
         ptr::copy_nonoverlapping(sqe, self.sqe_array.add(index), 1);
-        std::sync::atomic::store_volatile(self.tail, tail.wrapping_add(1));
+        std::ptr::store_volatile(self.tail, tail.wrapping_add(1));
     }
 
     /// Peek at the next CQE without consuming it.
     unsafe fn peek_cqe(&self) -> Option<IoUringCqe> {
-        let head = std::sync::atomic::read_volatile(self.head);
-        let tail = std::sync::atomic::read_volatile(self.tail);
+        let head = std::ptr::read_volatile(self.head);
+        let tail = std::ptr::read_volatile(self.tail);
         if head == tail {
             return None;
         }
@@ -220,8 +222,8 @@ impl IoUringRing {
 
     /// Mark the current CQE as consumed.
     unsafe fn consume_cqe(&self) {
-        let head = std::sync::atomic::read_volatile(self.head);
-        std::sync::atomic::store_volatile(self.head, head.wrapping_add(1));
+        let head = std::ptr::read_volatile(self.head);
+        std::ptr::store_volatile(self.head, head.wrapping_add(1));
     }
 }
 
@@ -326,7 +328,7 @@ impl GpuDirectNvmeDriver {
         let nvme = NvmeDevice::open(nvme_path, ns_id)?;
 
         // Create io_uring
-        let mut params: libc::io_uring_params = unsafe { std::mem::zeroed() };
+        let mut params: io_uring_params = unsafe { std::mem::zeroed() };
         let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 256u32, &mut params as *mut _) };
         if fd < 0 {
             return Err(HwError::InitFailed(format!(
@@ -454,15 +456,13 @@ impl GpuDirectNvmeDriver {
         let pool_buf = self.dma_pool.alloc().ok_or(HwError::QueueFull)?;
 
         // Stage 1: Copy from GPU to pool buffer via CUDA async
-        unsafe {
-            crate::cuda::memcpy_d2h_async(
-                pool_buf.as_mut_ptr(),
-                gpu_buf.dev_ptr + gpu_offset as u64,
-                transfer_size,
-                self.stream,
-            )
-            .map_err(|e| HwError::InitFailed(format!("cuMemcpyDtoHAsync: {}", e)))?;
-        }
+        crate::cuda::memcpy_d2h_async(
+            pool_buf.as_mut_ptr(),
+            gpu_buf.dev_ptr + gpu_offset as u64,
+            transfer_size,
+            self.stream,
+        )
+        .map_err(|e| HwError::InitFailed(format!("cuMemcpyDtoHAsync: {}", e)))?;
 
         // Stage 2: Submit io_uring write from pool buffer to NVMe
         let user_data = {
@@ -591,15 +591,13 @@ impl GpuDirectNvmeDriver {
         if !op.is_write {
             // Read completed: copy from pool buffer to GPU
             let transfer_size = op.num_blocks as usize * op.block_size as usize;
-            unsafe {
-                crate::cuda::memcpy_h2d_async(
-                    op.gpu_ptr + op.gpu_offset as u64,
-                    op.pool_buf_addr as *const u8,
-                    transfer_size,
-                    self.stream,
-                )
-                .map_err(|e| HwError::InitFailed(format!("cuMemcpyH2dAsync: {}", e)))?;
-            }
+            crate::cuda::memcpy_h2d_async(
+                op.gpu_ptr + op.gpu_offset as u64,
+                op.pool_buf_addr as *const u8,
+                transfer_size,
+                self.stream,
+            )
+            .map_err(|e| HwError::InitFailed(format!("cuMemcpyH2dAsync: {}", e)))?;
         }
 
         // Return pool buffer
@@ -665,9 +663,7 @@ impl GpuDirectNvmeDriver {
 
 impl Drop for GpuDirectNvmeDriver {
     fn drop(&mut self) {
-        unsafe {
-            crate::cuda::stream_destroy(self.stream).ok();
-        }
+        crate::cuda::stream_destroy(self.stream).ok();
         // IoUringRing and NvmeDevice drop automatically
     }
 }
