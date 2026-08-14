@@ -23,9 +23,9 @@ tokio = { version = "1", optional = true, features = ["io-util"] }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tokio = { version = "1", features = ["rt", "macros", "io-util", "fs"] }
-tpt-torus-backend-uring = { path = "../tpt-torus-backend-uring", version = "0.1.0" }
-tpt-torus-backend-iocp = { path = "../tpt-torus-backend-iocp", version = "0.1.0" }
-tpt-torus-backend-kqueue = { path = "../tpt-torus-backend-kqueue", version = "0.1.0" }
+tpt-torus-backend-uring = { path = "../tpt-torus-backend-uring" }
+tpt-torus-backend-iocp = { path = "../tpt-torus-backend-iocp" }
+tpt-torus-backend-kqueue = { path = "../tpt-torus-backend-kqueue" }
 
 [features]
 default = []
