@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Scaffold a new TPT Torus project against the ergonomic facade."
+readme = "README.md"
 keywords = ["torus", "scaffold", "cli", "io-uring"]
 categories = ["command-line-utilities"]
 
