@@ -672,7 +672,7 @@ impl Backend for KqueueBackend {
 
         self.in_flight
             .fetch_add(submitted as u32, Ordering::Relaxed);
-        Ok(submitted as usize)
+        Ok(submitted)
     }
 
     fn reap(&self, results: &mut Vec<TorusResult>) -> tpt_torus_core::error::Result<usize> {

@@ -41,7 +41,7 @@ impl Result {
         if self.is_ok() {
             None
         } else {
-            Some(-self.result as i32)
+            Some(self.result.wrapping_neg() as i32)
         }
     }
 }
