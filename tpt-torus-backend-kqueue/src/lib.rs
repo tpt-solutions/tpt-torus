@@ -554,8 +554,7 @@ impl Backend for KqueueBackend {
                     submitted += 1;
                 }
                 Operation::Connect { fd, addr, addrlen } => {
-                    let r =
-                        unsafe { libc::connect(*fd, *addr, *addrlen as libc::socklen_t) };
+                    let r = unsafe { libc::connect(*fd, *addr, *addrlen as libc::socklen_t) };
                     if r < 0
                         && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINPROGRESS)
                     {
@@ -574,7 +573,8 @@ impl Backend for KqueueBackend {
                                 drop(Box::from_raw(ctx));
                             }
                             self.post_completion(TorusResult::new(
-                                -(std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64),
+                                -(std::io::Error::last_os_error().raw_os_error().unwrap_or(5)
+                                    as i64),
                                 flow.user_data(),
                             ));
                         }
