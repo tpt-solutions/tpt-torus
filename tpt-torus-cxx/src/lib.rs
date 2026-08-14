@@ -127,12 +127,28 @@ pub unsafe extern "C" fn torus_create_with_backend(
         return -22; // EINVAL
     }
 
-    // NOTE: This function requires a backend to be created externally.
-    // In practice, the C++ wrapper would create the backend and pass it.
-    // For now, return an error indicating this function needs a backend.
-    let _ = ring_entries;
-    *handle = std::ptr::null_mut();
-    -38 // ENOSYS - function not implemented (needs backend)
+    // Build the platform-default backend and construct the Torus handle,
+    // exactly as `torus_create` does.
+    let backend = match make_backend(ring_entries) {
+        Some(b) => b,
+        None => {
+            *handle = std::ptr::null_mut();
+            return -38; // ENOSYS - no backend available for this target
+        }
+    };
+
+    match Torus::new(ring_entries, backend) {
+        Ok(torus) => {
+            *handle = Box::into_raw(Box::new(TorusHandle {
+                torus: Arc::new(torus),
+            }));
+            0
+        }
+        Err(_) => {
+            *handle = std::ptr::null_mut();
+            -22 // EINVAL
+        }
+    }
 }
 
 /// Destroy a Torus instance.

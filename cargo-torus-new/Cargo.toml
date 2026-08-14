@@ -1,0 +1,17 @@
+[package]
+name = "cargo-torus-new"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Scaffold a new TPT Torus project against the ergonomic facade."
+keywords = ["torus", "scaffold", "cli", "io-uring"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "cargo-torus-new"
+path = "src/main.rs"
+
+[dependencies]

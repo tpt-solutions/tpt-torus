@@ -2,14 +2,20 @@
 
 macOS/BSD **kqueue** backend engine for [TPT Torus](https://github.com/tpt-solutions/tpt-torus) — a unified, cross-platform async I/O framework.
 
-This crate implements `tpt_torus_core::backend::Backend` using the same background-reactor pattern as IOCP, built on raw `kevent`/`kqueue` FFI (declared inline in this crate, since kqueue's ABI is simple enough to inline rather than live in `tpt-torus-sys`). Socket I/O uses native `EVFILT_READ` / `EVFILT_WRITE` for true async I/O; **file I/O is dispatched to a thread pool** because kqueue has no native async file I/O on macOS/BSD.
+This crate implements `tpt_torus_core::backend::Backend`. It creates a kqueue fd and spawns a background reactor thread, and the kqueue/`kevent` FFI is declared inline in this crate (kqueue's ABI is simple enough to inline rather than live in `tpt-torus-sys`).
+
+**Current state:** operations are executed **synchronously** inside `submit` via blocking `libc` syscalls and the results are posted immediately to the virtual CQ. The kqueue fd and background reactor thread exist, but the reactor currently polls `kevent` with an empty change list and does not yet translate events into completions — every completion is produced synchronously by `submit`. This is a functional, correct backend, but it does not yet provide true event-driven asynchronous I/O through kqueue.
+
+- File I/O: `pread` / `pwrite` / `preadv` / `pwritev`
+- Socket I/O: `recv` / `send` / `accept` / `connect`
+- Lifecycle: `close`
 
 Available on macOS/BSD only (`cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))`) — `kqueue`/`kevent` are not present on Linux despite it also being `cfg(unix)`.
 
 ## What it provides
 
-- `KqueueBackend::new()` — create the backend and start the event reactor thread.
-- Socket operations via native `EVFILT_READ`/`EVFILT_WRITE`; file read/write delegated to a worker thread pool.
+- `KqueueBackend::new()` — create the backend, open the kqueue fd, and start the reactor thread.
+- Synchronous `Backend` impl covering the full `Operation` set (read/write/readv/writev/send/recv/accept/connect/close), bridged onto blocking `libc` syscalls.
 
 ## Installation
 
@@ -40,7 +46,8 @@ torus.reap(&mut results).expect("reap");
 ## Platform notes
 
 - macOS/BSD only. On Windows/Linux `cargo build -p tpt-torus-backend-kqueue` compiles an empty crate.
-- File I/O is performed on a thread pool rather than through kqueue; socket I/O is event-driven.
+- Operations run synchronously in `submit`; the reactor thread is currently a placeholder and does not drive completions.
+- Because `submit` blocks on `libc` syscalls, I/O throughput is bounded by the calling thread; wiring the reactor to `EVFILT_READ`/`EVFILT_WRITE` for true async socket I/O and a thread pool for file I/O is future work (tracked in the project roadmap).
 
 ## Relationship to other crates
 

@@ -74,6 +74,26 @@ jobs:
           files: coverage/cobertura.xml
           fail_ci_if_error: false
 
+  fuzz:
+    name: Fuzz targets (bounded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Run fuzz targets (bounded)
+        working-directory: fuzz
+        run: |
+          for target in flow_creation result_parsing operation_validate; do
+            echo "Running fuzz target: $target"
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 -timeout=10
+          done
+
   msrv:
     name: MSRV check (1.87.0)
     runs-on: ubuntu-latest

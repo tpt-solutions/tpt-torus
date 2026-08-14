@@ -1,5 +1,10 @@
 # TPT Torus
 
+[![CI](https://github.com/tpt-solutions/tpt-torus/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-torus/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](./LICENSE-MIT)
+[![crates.io](https://img.shields.io/crates/v/tpt-torus-core.svg)](https://crates.io/crates/tpt-torus-core)
+[![docs.rs](https://docs.rs/tpt-torus-core/badge.svg)](https://docs.rs/tpt-torus-core)
+
 A unified, cross-platform, high-performance asynchronous I/O framework for Rust.
 
 TPT Torus abstracts OS-specific I/O multiplexing (Linux `io_uring`, Windows IOCP, macOS/BSD `kqueue`) behind a single, memory-safe, zero-cost API — the **Virtual Torus**. Application code is written once against a consistent ring-buffer paradigm (`Flow` for submission, `Result` for completion) and runs natively on every supported OS.
@@ -20,6 +25,40 @@ See `todo.md` for detailed progress.
   the native library is absent.
 
 ## Quick Start
+
+Add the library with:
+
+```bash
+cargo add tpt-torus-core
+```
+
+Then read a file with the ergonomic `TorusAsync` facade — it picks the right
+backend for your OS (io_uring / IOCP / kqueue) and handles the
+submit→wait→reap cycle for you:
+
+```rust,ignore
+use tpt_torus_core::async_api::TorusAsync;
+use tpt_torus_core::backend::Backend;
+use tpt_torus_backend_uring::UringBackend; // Linux
+
+let backend: Box<dyn Backend> = Box::new(UringBackend::new(256)?);
+let torus = TorusAsync::new(256, backend)?;
+
+let mut buf = vec![0u8; 4096];
+let bytes = torus.read(file_fd, &mut buf, 0).await?;
+```
+
+Prefer zero backend-fuss? The `torus-rs` facade wraps all of the above:
+
+```rust,ignore
+let torus = torus::open(1024)?;
+let bytes = torus.read(fd, &mut buf, 0).await?;
+```
+
+### Raw API (Opt-Out)
+
+For advanced use cases (manual batching, linked operations, fixed-buffer
+registration), drop down to the raw `Flow`/`Operation` API:
 
 ```rust,ignore
 use tpt_torus_core::flow::Flow;

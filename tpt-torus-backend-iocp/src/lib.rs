@@ -595,15 +595,20 @@ impl Backend for IocpBackend {
 
                     if ret == 0 {
                         let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        // Deallocate the overlapped since it won't complete
-                        unsafe {
-                            drop(Box::from_raw(ovl_ptr));
+                        // ERROR_IO_PENDING means the operation is still in flight; the
+                        // overlapped (and its completion) are owned by the reactor until
+                        // it reaps, so we must NOT free it here.
+                        if err != ERROR_IO_PENDING {
+                            // Deallocate the overlapped since it won't complete
+                            unsafe {
+                                drop(Box::from_raw(ovl_ptr));
+                            }
+                            self.completions
+                                .lock()
+                                .unwrap()
+                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
+                            self.notify.notify_one();
                         }
-                        self.completions
-                            .lock()
-                            .unwrap()
-                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
-                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
@@ -634,14 +639,19 @@ impl Backend for IocpBackend {
 
                     if ret == 0 {
                         let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        unsafe {
-                            drop(Box::from_raw(ovl_ptr));
+                        // ERROR_IO_PENDING means the operation is still in flight; the
+                        // overlapped (and its completion) are owned by the reactor until
+                        // it reaps, so we must NOT free it here.
+                        if err != ERROR_IO_PENDING {
+                            unsafe {
+                                drop(Box::from_raw(ovl_ptr));
+                            }
+                            self.completions
+                                .lock()
+                                .unwrap()
+                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
+                            self.notify.notify_one();
                         }
-                        self.completions
-                            .lock()
-                            .unwrap()
-                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
-                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
@@ -676,14 +686,19 @@ impl Backend for IocpBackend {
 
                     if ret != 0 {
                         let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        unsafe {
-                            drop(Box::from_raw(ovl_ptr));
+                        // WSA_IO_PENDING (== ERROR_IO_PENDING) means the operation is
+                        // still in flight; the overlapped (and its completion) are owned
+                        // by the reactor until it reaps, so we must NOT free it here.
+                        if err != ERROR_IO_PENDING {
+                            unsafe {
+                                drop(Box::from_raw(ovl_ptr));
+                            }
+                            self.completions
+                                .lock()
+                                .unwrap()
+                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
+                            self.notify.notify_one();
                         }
-                        self.completions
-                            .lock()
-                            .unwrap()
-                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
-                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
@@ -717,14 +732,19 @@ impl Backend for IocpBackend {
 
                     if ret != 0 {
                         let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        unsafe {
-                            drop(Box::from_raw(ovl_ptr));
+                        // WSA_IO_PENDING (== ERROR_IO_PENDING) means the operation is
+                        // still in flight; the overlapped (and its completion) are owned
+                        // by the reactor until it reaps, so we must NOT free it here.
+                        if err != ERROR_IO_PENDING {
+                            unsafe {
+                                drop(Box::from_raw(ovl_ptr));
+                            }
+                            self.completions
+                                .lock()
+                                .unwrap()
+                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
+                            self.notify.notify_one();
                         }
-                        self.completions
-                            .lock()
-                            .unwrap()
-                            .push_back(TorusResult::new(-err as i64, flow.user_data()));
-                        self.notify.notify_one();
                     }
                     submitted += 1;
                 }
@@ -770,15 +790,20 @@ impl Backend for IocpBackend {
 
                         if ret == 0 {
                             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                            unsafe {
-                                drop(Box::from_raw(ovl_ptr));
+                            // ERROR_IO_PENDING means this buffer's operation is still in
+                            // flight; leave the overlapped for the reactor and keep
+                            // submitting the remaining buffers.
+                            if err != ERROR_IO_PENDING {
+                                unsafe {
+                                    drop(Box::from_raw(ovl_ptr));
+                                }
+                                self.completions
+                                    .lock()
+                                    .unwrap()
+                                    .push_back(TorusResult::new(-err as i64, flow.user_data()));
+                                self.notify.notify_one();
+                                break;
                             }
-                            self.completions
-                                .lock()
-                                .unwrap()
-                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
-                            self.notify.notify_one();
-                            break;
                         }
                         current_offset += buf_desc.len as u64;
                     }
@@ -825,15 +850,20 @@ impl Backend for IocpBackend {
 
                         if ret == 0 {
                             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                            unsafe {
-                                drop(Box::from_raw(ovl_ptr));
+                            // ERROR_IO_PENDING means this buffer's operation is still in
+                            // flight; leave the overlapped for the reactor and keep
+                            // submitting the remaining buffers.
+                            if err != ERROR_IO_PENDING {
+                                unsafe {
+                                    drop(Box::from_raw(ovl_ptr));
+                                }
+                                self.completions
+                                    .lock()
+                                    .unwrap()
+                                    .push_back(TorusResult::new(-err as i64, flow.user_data()));
+                                self.notify.notify_one();
+                                break;
                             }
-                            self.completions
-                                .lock()
-                                .unwrap()
-                                .push_back(TorusResult::new(-err as i64, flow.user_data()));
-                            self.notify.notify_one();
-                            break;
                         }
                         current_offset += buf_desc.len as u64;
                     }

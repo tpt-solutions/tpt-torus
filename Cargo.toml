@@ -9,6 +9,7 @@ members = [
     "tpt-torus-cxx",
     "tpt-torus-hw",
     "torus-rs",
+    "cargo-torus-new",
 ]
 
 [workspace.package]

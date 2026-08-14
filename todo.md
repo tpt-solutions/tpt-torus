@@ -152,3 +152,36 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 - [x] Add fuzzing (e.g. `cargo-fuzz`) for the FFI/parsing boundary in `tpt-torus-sys`
 - [x] Add code coverage reporting to CI
 - [x] Convert the root README's `ignore`-tagged code sample into a real doctest or point it at a compiled example file
+
+## Platform Review Follow-ups (2026-08-14)
+
+Findings from a follow-up full-codebase review (bugs/TODOs, doc staleness, adoption/DX, CI automation). See the approved plan for full rationale.
+
+### Bugs / stale docs
+
+- [x] Fix `torus_create_with_backend` stub in `tpt-torus-cxx/src/lib.rs:122-136` — always returns ENOSYS instead of building a backend via `make_backend()` like `torus_create` does
+- [x] Correct stale "busy-repoll, no real waker registration" claims about `async_api.rs` in `AGENTS.md:40,56` and `CLAUDE.md` — `WakerRegistry` + reaper thread now exist
+- [x] Remove stray duplicate `todo 1260721.md` at repo root
+
+### Adoption / DX: README + examples
+
+- [x] Rework README Quick Start to lead with the `TorusAsync` facade instead of the raw `Flow`/`Operation` API; move raw API walkthrough under "Raw API (Opt-Out)"
+- [x] Add a `cargo add tpt-torus-core` install line to README
+- [x] Add CI/license/crates.io/docs.rs badges to README
+- [x] Add `tpt-torus-core/examples/hello_read.rs` (minimal `TorusAsync` example — core currently has zero examples)
+- [x] Add `tpt-torus-backend-iocp/examples/file_io.rs` (Windows-specific runnable sample)
+- [x] Add `tpt-torus-backend-kqueue/examples/file_io.rs` (macOS/BSD-specific runnable sample)
+- [x] Add doc comments to `flow.rs` types/variants (currently only 4 doc lines in the file)
+
+### CI / automation gaps
+
+- [x] Wire `fuzz/` targets (`flow_creation`, `result_parsing`, `operation_validate`) into `.github/workflows/ci.yml` as a bounded-duration job
+- [x] Add `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`
+- [x] Add `.github/PULL_REQUEST_TEMPLATE.md`
+
+### Innovation / recommendations (not scoped for implementation yet)
+
+- [x] Tokio-compatible `AsyncRead`/`AsyncWrite` shim over `TorusAsync` — `tpt-torus-core/src/async_tokio.rs` (new `tokio` feature) implements `AsyncRead`/`AsyncWrite` via `TorusAsyncReader`/`TorusAsyncWriter`, driven by the tokio-free `TorusAsync::poll_read_op`/`poll_write_op` helpers; covered by `tests/tokio_shim.rs`.
+- [x] Finish the kqueue reactor (event-driven `EVFILT_READ`/`EVFILT_WRITE` + thread-pool file I/O) — `tpt-torus-backend-kqueue/src/lib.rs` now registers socket ops with kqueue (the reactor performs the actual `recv`/`send`/`accept`/`connect` when ready, `EV_ONESHOT`) and dispatches file I/O to a `FileThreadPool`; `Close` is synchronous.
+- [x] `cargo generate`/`cargo-torus-new` project template — added the `cargo-torus-new` CLI crate (scaffolds a `torus`-based project) plus a `cargo-generate`-compatible `template/` directory.
+- [x] Structured `tracing` spans/metrics around submit/wait/reap — `observability.rs` now records per-`OpKind` latency histograms + success/error counters (always on) and emits `torus_io` spans/events when the `tracing` feature is enabled; `Torus::submit`/`submit_batch`/`reap`/`wait` are wired to create/complete `FlowSpan`s (gated by `feature = "tracing"`).

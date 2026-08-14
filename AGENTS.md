@@ -37,9 +37,9 @@ Fuzzing (FFI/parsing boundary): `cargo fuzz run <target>` from `fuzz/` (targets:
 ## Architecture essentials
 
 - `tpt-torus-sys` — raw `unsafe` FFI only. Never add safe wrappers here (that's `core`'s job); struct layouts must match kernel/OS ABI byte-for-byte.
-- `tpt-torus-core` — public abstraction: `Torus` handle, `Backend` trait (the OS-agnostic↔OS-specific seam), `Flow`/`Operation`/`Result`, `rings.rs`, `lease.rs`+`torus_panic.rs` (Safe API), `async_api.rs` (`TorusAsync` — currently busy-repoll scaffold, no real waker registration yet).
+- `tpt-torus-core` — public abstraction: `Torus` handle, `Backend` trait (the OS-agnostic↔OS-specific seam), `Flow`/`Operation`/`Result`, `rings.rs`, `lease.rs`+`torus_panic.rs` (Safe API), `async_api.rs` (`TorusAsync` — ergonomic async/await wrapper; registers real wakers via `WakerRegistry` + a background reaper thread, so it works with parking runtimes like tokio/async-std).
 - `tpt-torus-backend-uring` — Linux: real kernel `mmap` shared memory, no reactor thread.
-- `tpt-torus-backend-iocp` / `-kqueue` — background reactor thread pattern; kqueue file I/O dispatched to a thread pool (no native async file I/O).
+- `tpt-torus-backend-iocp` / `-kqueue` — background reactor thread pattern. **kqueue caveat:** operations currently run **synchronously inside `submit`** via blocking `libc` syscalls (pread/pwrite/recv/send/accept/connect/close); the kqueue fd + reactor thread exist but the reactor only polls `kevent` with an empty change list and does NOT translate events into completions yet. File I/O and socket I/O both route through synchronous `submit`, not the reactor. True event-driven `EVFILT_READ`/`EVFILT_WRITE` socket I/O + thread-pool file I/O is future work.
 - `tpt-torus-hw` — SPDK/DPDK/GPU-Direct behind feature flags; uses runtime `libloading` and degrades to `NotAvailable` when native libs are absent.
 - `torus-rs` — ergonomic Rust facade (`torus::open()` + re-export). `torus-go`/`torus-py` are separate out-of-tree bindings over `torus.h`.
 
@@ -53,4 +53,5 @@ Fuzzing (FFI/parsing boundary): `cargo fuzz run <target>` from `fuzz/` (targets:
 ## Known open issues worth knowing
 
 - `UringBackend::wait` `min_complete` heuristic is fixed: `reap()` now only decrements `in_flight` for disarming CQEs (`IORING_CQE_F_MORE` clear), so armed multishot accept/recv keep `in_flight > 0` and `wait()` blocks correctly for the next completion.
-- `async_api.rs` futures still busy-repoll instead of registering wakers.
+- `async_api.rs` futures register real wakers via `WakerRegistry` + a background reaper thread (the earlier busy-repoll scaffold was replaced).
+- `KqueueBackend` runs all operations synchronously in `submit` via blocking `libc` syscalls; the reactor thread is a placeholder (polls `kevent` with an empty change list) and does not drive completions. I/O throughput is bounded by the calling thread until the reactor is wired to `EVFILT_READ`/`EVFILT_WRITE` and file I/O moves to a thread pool.

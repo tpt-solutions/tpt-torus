@@ -4,6 +4,8 @@
 //! types that replace raw SQE/CQE across all backends.
 
 pub mod async_api;
+#[cfg(feature = "tokio")]
+pub mod async_tokio;
 pub mod backend;
 pub mod cgroup;
 pub mod error;
@@ -37,6 +39,10 @@ pub struct Torus {
     sq: SubmissionRing,
     cq: CompletionRing,
     backend: Mutex<Box<dyn Backend>>,
+    /// In-flight operation spans, keyed by `user_data`, consumed on `reap`.
+    /// Only present when the `tracing` feature is enabled.
+    #[cfg(feature = "tracing")]
+    spans: Mutex<std::collections::HashMap<u64, crate::observability::FlowSpan>>,
 }
 
 // SAFETY: Torus is thread-safe. The backend is behind a Mutex, and the rings
@@ -56,6 +62,8 @@ impl Torus {
             sq: SubmissionRing::new(ring_entries),
             cq: CompletionRing::new(ring_entries),
             backend: Mutex::new(backend),
+            #[cfg(feature = "tracing")]
+            spans: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -67,15 +75,29 @@ impl Torus {
             .unwrap()
             .submit(std::slice::from_ref(flow))?;
         if n == 0 {
-            Err(Error::SubmissionFull)
-        } else {
-            Ok(())
+            return Err(Error::SubmissionFull);
         }
+        #[cfg(feature = "tracing")]
+        {
+            self.spans
+                .lock()
+                .unwrap()
+                .insert(flow.user_data(), crate::observability::FlowSpan::new(flow));
+        }
+        Ok(())
     }
 
     /// Submit a batch of flows to the Virtual Torus.
     pub fn submit_batch(&self, flows: &[Flow]) -> Result<usize> {
-        self.backend.lock().unwrap().submit(flows)
+        let n = self.backend.lock().unwrap().submit(flows)?;
+        #[cfg(feature = "tracing")]
+        {
+            let mut spans = self.spans.lock().unwrap();
+            for flow in flows.iter().take(n) {
+                spans.insert(flow.user_data(), crate::observability::FlowSpan::new(flow));
+            }
+        }
+        Ok(n)
     }
 
     /// Submit a vectored read (readv) operation.
@@ -114,11 +136,23 @@ impl Torus {
 
     /// Reap all available completions.
     pub fn reap(&self, results: &mut Vec<TorusResult>) -> Result<usize> {
-        self.backend.lock().unwrap().reap(results)
+        let count = self.backend.lock().unwrap().reap(results)?;
+        #[cfg(feature = "tracing")]
+        {
+            let mut spans = self.spans.lock().unwrap();
+            for r in results.iter() {
+                if let Some(span) = spans.remove(&r.user_data) {
+                    span.complete(r.result);
+                }
+            }
+        }
+        Ok(count)
     }
 
     /// Block until at least one completion is available.
     pub fn wait(&self, timeout_us: u64) -> Result<()> {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::debug_span!("torus_wait", timeout_us = timeout_us).entered();
         self.backend.lock().unwrap().wait(timeout_us)
     }
 
