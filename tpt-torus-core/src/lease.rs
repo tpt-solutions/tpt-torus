@@ -186,42 +186,23 @@ impl LeaseRegistry {
             .any(|r| r.in_flight > 0)
     }
 
-    /// Collect all registered regions into a `libc::iovec` array suitable for
-    /// `IORING_REGISTER_BUFFERS`.
-    ///
-    /// Returns `(iovec_ptr, count)`. The caller must not free the returned
-    /// pointer — it borrows from the internal BTreeMap.
-    ///
-    /// # Safety
-    ///
-    /// The returned pointer is valid only while the read lock is held.
-    /// Callers must use the pointer immediately and not store it.
-    #[cfg(unix)]
-    pub fn as_iovec(&self) -> (*const libc::iovec, usize) {
-        // This is a simplified version — in production you'd want to
-        // return a guarded reference. For now, we collect into a Vec.
-        let regions = self.regions.read().unwrap();
-        let iovecs: Vec<libc::iovec> = regions
-            .values()
-            .map(|r| libc::iovec {
-                iov_base: r.start as *mut libc::c_void,
-                iov_len: r.len,
-            })
-            .collect();
-        let ptr = iovecs.as_ptr();
-        let len = iovecs.len();
-        std::mem::forget(iovecs); // Leaked — caller must handle
-        (ptr, len)
-    }
-
-    /// Number of bytes across all registered regions.
-    pub fn total_bytes(&self) -> usize {
+    /// Collect all registered regions into `RegisterBuffer`s suitable for kernel
+    /// buffer registration (e.g. io_uring `IORING_REGISTER_BUFFERS`).
+    pub fn as_register_buffers(&self) -> Vec<crate::backend::RegisterBuffer> {
         self.regions
             .read()
             .unwrap()
             .values()
-            .map(|r| r.len)
-            .sum()
+            .map(|r| crate::backend::RegisterBuffer {
+                ptr: r.start as *const u8,
+                len: r.len,
+            })
+            .collect()
+    }
+
+    /// Number of bytes across all registered regions.
+    pub fn total_bytes(&self) -> usize {
+        self.regions.read().unwrap().values().map(|r| r.len).sum()
     }
 }
 

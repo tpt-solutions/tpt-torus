@@ -15,10 +15,12 @@
 //!
 //! Both stages are async and can be pipelined for maximum throughput.
 
-use crate::dma_pool::{BufferHandle, ZeroCopyDmaPool};
+use crate::dma_pool::ZeroCopyDmaPool;
 use crate::gpu_direct::GpuBuffer;
 use crate::{HwError, HwResult};
+use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tpt_torus_sys::io_uring_params;
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -30,9 +32,6 @@ const IORING_OP_WRITE_FIXED: u8 = 29;
 
 /// io_uring SQE flag for fixed buffers.
 const IOSQE_FIXED_FILE: u8 = 1 << 0;
-
-/// io_uring CQE flag for buffer selection.
-const IORING_CQE_F_BUFFER: u32 = 1 << 0;
 
 // ─── NVMe Device ───────────────────────────────────────────────────────────
 
@@ -71,15 +70,73 @@ impl NvmeDevice {
         })
     }
 
-    pub fn fd(&self) -> i32 { self.fd }
-    pub fn ns_id(&self) -> u32 { self.ns_id }
-    pub fn block_size(&self) -> u32 { self.block_size }
-    pub fn name(&self) -> &str { &self.name }
+    pub fn fd(&self) -> i32 {
+        self.fd
+    }
+    pub fn ns_id(&self) -> u32 {
+        self.ns_id
+    }
+    pub fn block_size(&self) -> u32 {
+        self.block_size
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Total number of addressable blocks (0 until queried from the device).
+    pub fn total_blocks(&self) -> u64 {
+        self.total_blocks
+    }
 }
 
 impl Drop for NvmeDevice {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd); }
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
+
+// ─── NVMe Passthrough Command ──────────────────────────────────────────────
+
+/// NVMe passthrough command built for a raw io_uring NVMe submission.
+///
+/// Fields mirror the NVMe command dwords used by an `NVME_IOCTL_SUBMIT_IO`
+/// style submission: `cdw12` carries the (0-based) block count, `cdw14`/`cdw15`
+/// carry the starting LBA.
+pub struct NvmePassthroughCmd {
+    /// NVMe opcode (`0x02` read, `0x01` write).
+    pub opcode: u8,
+    /// Namespace identifier.
+    pub ns_id: u32,
+    /// Command Dword 12 (NLB is 0-based: `num_blocks - 1`).
+    pub cdw12: u32,
+    /// Command Dword 14 (low 32 bits of the starting LBA).
+    pub cdw14: u32,
+    /// Command Dword 15 (high 32 bits of the starting LBA).
+    pub cdw15: u32,
+}
+
+impl NvmePassthroughCmd {
+    /// Build a read command for `num_blocks` starting at `lba`.
+    pub fn read(lba: u64, num_blocks: u32, ns_id: u32) -> Self {
+        Self {
+            opcode: 0x02,
+            ns_id,
+            cdw12: num_blocks - 1,
+            cdw14: (lba & 0xFFFF_FFFF) as u32,
+            cdw15: (lba >> 32) as u32,
+        }
+    }
+
+    /// Build a write command for `num_blocks` starting at `lba`.
+    pub fn write(lba: u64, num_blocks: u32, ns_id: u32) -> Self {
+        Self {
+            opcode: 0x01,
+            ns_id,
+            cdw12: num_blocks - 1,
+            cdw14: (lba & 0xFFFF_FFFF) as u32,
+            cdw15: (lba >> 32) as u32,
+        }
     }
 }
 
@@ -100,14 +157,20 @@ struct IoUringRing {
 unsafe impl Send for IoUringRing {}
 unsafe impl Sync for IoUringRing {}
 
+/// Magic offsets passed to `mmap(2)` on the io_uring fd to reach each region.
+/// These are fixed kernel ABI constants, not derived from `io_uring_params`.
+const IORING_OFF_SQ_RING: libc::off_t = 0;
+const IORING_OFF_CQ_RING: libc::off_t = 0x8000000;
+const IORING_OFF_SQES: libc::off_t = 0x10000000;
+
 impl IoUringRing {
     /// Create an io_uring ring by mmap'ing the kernel shared memory.
-    fn new(fd: i32, params: &libc::io_uring_params) -> HwResult<Self> {
+    fn new(fd: i32, params: &io_uring_params) -> HwResult<Self> {
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
 
         // mmap SQ ring
-        let sq_ring_size = params.sq_off.array as usize
-            + params.sq_entries as usize * std::mem::size_of::<u32>();
+        let sq_ring_size =
+            params.sq_off.array as usize + params.sq_entries as usize * std::mem::size_of::<u32>();
         let sq_ring_size = (sq_ring_size + page_size - 1) & !(page_size - 1);
 
         let sq_ring_ptr = unsafe {
@@ -115,9 +178,9 @@ impl IoUringRing {
                 ptr::null_mut(),
                 sq_ring_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
-                0,
+                IORING_OFF_SQ_RING,
             )
         };
         if sq_ring_ptr == libc::MAP_FAILED {
@@ -127,21 +190,21 @@ impl IoUringRing {
         // mmap SQE array
         let sqe_size = params.sq_entries as usize * std::mem::size_of::<IoUringSqe>();
         let sqe_size = (sqe_size + page_size - 1) & !(page_size - 1);
-        let sqe_offset = params.sq_off.array as usize
-            + params.sq_entries as usize * std::mem::size_of::<u32>();
 
         let sqe_ptr = unsafe {
             libc::mmap(
                 ptr::null_mut(),
                 sqe_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
-                sqe_offset as libc::off_t,
+                IORING_OFF_SQES,
             )
         };
         if sqe_ptr == libc::MAP_FAILED {
-            unsafe { libc::munmap(sq_ring_ptr, sq_ring_size); }
+            unsafe {
+                libc::munmap(sq_ring_ptr, sq_ring_size);
+            }
             return Err(HwError::InitFailed("mmap SQE array failed".into()));
         }
 
@@ -155,9 +218,9 @@ impl IoUringRing {
                 ptr::null_mut(),
                 cq_ring_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_POPULATE,
+                libc::MAP_SHARED,
                 fd,
-                0,
+                IORING_OFF_CQ_RING,
             )
         };
         if cq_ring_ptr == libc::MAP_FAILED {
@@ -185,16 +248,17 @@ impl IoUringRing {
 
     /// Submit an SQE to the ring.
     unsafe fn submit_sqe(&self, sqe: &IoUringSqe) {
-        let tail = std::sync::atomic::read_volatile(self.tail);
+        let tail = std::ptr::read_volatile(self.tail);
         let index = (tail & self.ring_mask) as usize;
+        debug_assert!(index < self.ring_entries as usize);
         ptr::copy_nonoverlapping(sqe, self.sqe_array.add(index), 1);
-        std::sync::atomic::store_volatile(self.tail, tail.wrapping_add(1));
+        std::ptr::write_volatile(self.tail, tail.wrapping_add(1));
     }
 
     /// Peek at the next CQE without consuming it.
     unsafe fn peek_cqe(&self) -> Option<IoUringCqe> {
-        let head = std::sync::atomic::read_volatile(self.head);
-        let tail = std::sync::atomic::read_volatile(self.tail);
+        let head = std::ptr::read_volatile(self.head);
+        let tail = std::ptr::read_volatile(self.tail);
         if head == tail {
             return None;
         }
@@ -204,8 +268,8 @@ impl IoUringRing {
 
     /// Mark the current CQE as consumed.
     unsafe fn consume_cqe(&self) {
-        let head = std::sync::atomic::read_volatile(self.head);
-        std::sync::atomic::store_volatile(self.head, head.wrapping_add(1));
+        let head = std::ptr::read_volatile(self.head);
+        std::ptr::write_volatile(self.head, head.wrapping_add(1));
     }
 }
 
@@ -221,7 +285,7 @@ impl Drop for IoUringRing {
 
 /// Tracks pending NVMe operations and their completions.
 struct CompletionTracker {
-    /// Map from user_data to (pool buffer index, GPU buf ptr, gpu offset, lba, num_blocks, is_write).
+    /// Map from user_data to (pool buffer index, GPU buf ptr, gpu offset, num_blocks, is_write).
     pending: std::collections::HashMap<u64, PendingOp>,
     next_id: AtomicU64,
 }
@@ -230,7 +294,6 @@ struct PendingOp {
     pool_index: u32,
     gpu_ptr: u64,
     gpu_offset: usize,
-    lba: u64,
     num_blocks: u32,
     is_write: bool,
     pool_buf_addr: u64,
@@ -271,7 +334,7 @@ impl CompletionTracker {
 /// ```text
 /// NVMe ──[io_uring READ]──► DMA Pool Buffer ──[CUDA H2D]──► GPU VRAM
 /// ```
-pub struct GpuDirectNvmeDriver {
+pub struct GpuDirectNvme {
     /// NVMe device handle.
     nvme: NvmeDevice,
     /// io_uring ring for submissions.
@@ -286,35 +349,48 @@ pub struct GpuDirectNvmeDriver {
     tracker: std::sync::Mutex<CompletionTracker>,
 }
 
-unsafe impl Send for GpuDirectNvmeDriver {}
-unsafe impl Sync for GpuDirectNvmeDriver {}
+unsafe impl Send for GpuDirectNvme {}
+unsafe impl Sync for GpuDirectNvme {}
 
-impl GpuDirectNvmeDriver {
-    /// Create a new GPU-Direct NVMe driver.
+impl GpuDirectNvme {
+    /// Create a new GPU-Direct NVMe driver with default pool sizing.
+    ///
+    /// # Arguments
+    /// - `nvme_path`: Path to the NVMe block device (e.g., `/dev/nvme0n1`).
+    /// - `ns_id`: NVMe namespace ID.
+    pub fn new(nvme_path: &str, ns_id: u32) -> HwResult<Self> {
+        const DEFAULT_POOL_BUF_SIZE: usize = 64 * 1024;
+        const DEFAULT_POOL_CAPACITY: usize = 64;
+        Self::with_pool(
+            nvme_path,
+            ns_id,
+            DEFAULT_POOL_BUF_SIZE,
+            DEFAULT_POOL_CAPACITY,
+        )
+    }
+
+    /// Create a new GPU-Direct NVMe driver with explicit pool sizing.
     ///
     /// # Arguments
     /// - `nvme_path`: Path to the NVMe block device (e.g., `/dev/nvme0n1`).
     /// - `ns_id`: NVMe namespace ID.
     /// - `pool_buf_size`: Size of each DMA pool buffer (must be power of 2).
     /// - `pool_capacity`: Number of buffers in the DMA pool.
-    pub fn new(
+    pub fn with_pool(
         nvme_path: &str,
         ns_id: u32,
         pool_buf_size: usize,
         pool_capacity: usize,
     ) -> HwResult<Self> {
         // Initialize CUDA
-        crate::cuda::init()
-            .map_err(|e| HwError::InitFailed(format!("CUDA init: {}", e)))?;
+        crate::cuda::init().map_err(|e| HwError::InitFailed(format!("CUDA init: {}", e)))?;
 
         // Open NVMe device
         let nvme = NvmeDevice::open(nvme_path, ns_id)?;
 
         // Create io_uring
-        let mut params: libc::io_uring_params = unsafe { std::mem::zeroed() };
-        let fd = unsafe {
-            libc::syscall(libc::SYS_io_uring_setup, 256u32, &mut params as *mut _)
-        };
+        let mut params: io_uring_params = unsafe { std::mem::zeroed() };
+        let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 256u32, &mut params as *mut _) };
         if fd < 0 {
             return Err(HwError::InitFailed(format!(
                 "io_uring_setup: {}",
@@ -365,23 +441,24 @@ impl GpuDirectNvmeDriver {
         }
 
         // Allocate a DMA pool buffer for this transfer
-        let pool_buf = self.dma_pool.alloc()
-            .ok_or(HwError::QueueFull)?;
+        let pool_buf = self.dma_pool.alloc().ok_or(HwError::QueueFull)?;
 
         // Build io_uring SQE for NVMe read into pool buffer
         let user_data = {
             let mut tracker = self.tracker.lock().unwrap();
             let id = tracker.next_id();
-            tracker.insert(id, PendingOp {
-                pool_index: pool_buf.index(),
-                gpu_ptr: gpu_buf.dev_ptr,
-                gpu_offset,
-                lba,
-                num_blocks,
-                is_write: false,
-                pool_buf_addr: pool_buf.addr(),
-                block_size,
-            });
+            tracker.insert(
+                id,
+                PendingOp {
+                    pool_index: pool_buf.index(),
+                    gpu_ptr: gpu_buf.dev_ptr,
+                    gpu_offset,
+                    num_blocks,
+                    is_write: false,
+                    pool_buf_addr: pool_buf.addr(),
+                    block_size,
+                },
+            );
             id
         };
 
@@ -398,10 +475,13 @@ impl GpuDirectNvmeDriver {
             buf_group: pool_buf.registered_index(),
             personality: 0,
             splice_fd_in: 0,
-            __pad2: [0; 2],
+            addr3: 0,
+            __pad2: 0,
         };
 
-        unsafe { self.ring.submit_sqe(&sqe); }
+        unsafe {
+            self.ring.submit_sqe(&sqe);
+        }
 
         // Submit to kernel
         self.flush_submissions(1)?;
@@ -433,33 +513,33 @@ impl GpuDirectNvmeDriver {
         }
 
         // Allocate a DMA pool buffer
-        let pool_buf = self.dma_pool.alloc()
-            .ok_or(HwError::QueueFull)?;
+        let pool_buf = self.dma_pool.alloc().ok_or(HwError::QueueFull)?;
 
         // Stage 1: Copy from GPU to pool buffer via CUDA async
-        unsafe {
-            crate::cuda::memcpy_d2h_async(
-                pool_buf.as_mut_ptr(),
-                gpu_buf.dev_ptr + gpu_offset as u64,
-                transfer_size,
-                self.stream,
-            ).map_err(|e| HwError::InitFailed(format!("cuMemcpyDtoHAsync: {}", e)))?;
-        }
+        crate::cuda::memcpy_d2h_async(
+            pool_buf.as_mut_ptr(),
+            gpu_buf.dev_ptr + gpu_offset as u64,
+            transfer_size,
+            self.stream,
+        )
+        .map_err(|e| HwError::InitFailed(format!("cuMemcpyDtoHAsync: {}", e)))?;
 
         // Stage 2: Submit io_uring write from pool buffer to NVMe
         let user_data = {
             let mut tracker = self.tracker.lock().unwrap();
             let id = tracker.next_id();
-            tracker.insert(id, PendingOp {
-                pool_index: pool_buf.index(),
-                gpu_ptr: gpu_buf.dev_ptr,
-                gpu_offset,
-                lba,
-                num_blocks,
-                is_write: true,
-                pool_buf_addr: pool_buf.addr(),
-                block_size,
-            });
+            tracker.insert(
+                id,
+                PendingOp {
+                    pool_index: pool_buf.index(),
+                    gpu_ptr: gpu_buf.dev_ptr,
+                    gpu_offset,
+                    num_blocks,
+                    is_write: true,
+                    pool_buf_addr: pool_buf.addr(),
+                    block_size,
+                },
+            );
             id
         };
 
@@ -476,10 +556,13 @@ impl GpuDirectNvmeDriver {
             buf_group: pool_buf.registered_index(),
             personality: 0,
             splice_fd_in: 0,
-            __pad2: [0; 2],
+            addr3: 0,
+            __pad2: 0,
         };
 
-        unsafe { self.ring.submit_sqe(&sqe); }
+        unsafe {
+            self.ring.submit_sqe(&sqe);
+        }
         self.flush_submissions(1)?;
 
         std::mem::forget(pool_buf);
@@ -505,7 +588,9 @@ impl GpuDirectNvmeDriver {
 
             // Check for completions
             while let Some(cqe) = unsafe { self.ring.peek_cqe() } {
-                unsafe { self.ring.consume_cqe(); }
+                unsafe {
+                    self.ring.consume_cqe();
+                }
 
                 if cqe.user_data == transfer_id {
                     // Complete the transfer
@@ -531,7 +616,9 @@ impl GpuDirectNvmeDriver {
         }
 
         if let Some(cqe) = unsafe { self.ring.peek_cqe() } {
-            unsafe { self.ring.consume_cqe(); }
+            unsafe {
+                self.ring.consume_cqe();
+            }
             self.complete_transfer(cqe.user_data, cqe.res)?;
             Ok(Some((cqe.user_data, cqe.res)))
         } else {
@@ -563,14 +650,13 @@ impl GpuDirectNvmeDriver {
         if !op.is_write {
             // Read completed: copy from pool buffer to GPU
             let transfer_size = op.num_blocks as usize * op.block_size as usize;
-            unsafe {
-                crate::cuda::memcpy_h2d_async(
-                    op.gpu_ptr + op.gpu_offset as u64,
-                    op.pool_buf_addr as *const u8,
-                    transfer_size,
-                    self.stream,
-                ).map_err(|e| HwError::InitFailed(format!("cuMemcpyH2dAsync: {}", e)))?;
-            }
+            crate::cuda::memcpy_h2d_async(
+                op.gpu_ptr + op.gpu_offset as u64,
+                op.pool_buf_addr as *const u8,
+                transfer_size,
+                self.stream,
+            )
+            .map_err(|e| HwError::InitFailed(format!("cuMemcpyH2dAsync: {}", e)))?;
         }
 
         // Return pool buffer
@@ -634,11 +720,9 @@ impl GpuDirectNvmeDriver {
     }
 }
 
-impl Drop for GpuDirectNvmeDriver {
+impl Drop for GpuDirectNvme {
     fn drop(&mut self) {
-        unsafe {
-            crate::cuda::stream_destroy(self.stream).ok();
-        }
+        crate::cuda::stream_destroy(self.stream).ok();
         // IoUringRing and NvmeDevice drop automatically
     }
 }
@@ -660,8 +744,11 @@ pub struct IoUringSqe {
     pub buf_group: u16,
     pub personality: u16,
     pub splice_fd_in: i32,
-    pub __pad2: [u32; 2],
+    pub addr3: u64,
+    pub __pad2: u64,
 }
+
+const _: () = assert!(std::mem::size_of::<IoUringSqe>() == 64);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -689,16 +776,18 @@ mod tests {
         let id = tracker.next_id();
         assert_eq!(id, 1);
 
-        tracker.insert(id, PendingOp {
-            pool_index: 0,
-            gpu_ptr: 0x1000,
-            gpu_offset: 0,
-            lba: 0,
-            num_blocks: 8,
-            is_write: false,
-            pool_buf_addr: 0x2000,
-            block_size: 512,
-        });
+        tracker.insert(
+            id,
+            PendingOp {
+                pool_index: 0,
+                gpu_ptr: 0x1000,
+                gpu_offset: 0,
+                num_blocks: 8,
+                is_write: false,
+                pool_buf_addr: 0x2000,
+                block_size: 512,
+            },
+        );
 
         assert!(tracker.remove(id).is_some());
         assert!(tracker.remove(id).is_none());

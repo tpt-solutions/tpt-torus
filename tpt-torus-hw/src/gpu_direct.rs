@@ -265,12 +265,7 @@ impl DmaEngine {
     }
 
     /// Submit an async device-to-device transfer.
-    pub fn submit_d2d(
-        &mut self,
-        src: u64,
-        dst: u64,
-        len: usize,
-    ) -> HwResult<u64> {
+    pub fn submit_d2d(&mut self, src: u64, dst: u64, len: usize) -> HwResult<u64> {
         if !self.has_capacity() {
             return Err(HwError::QueueFull);
         }
@@ -283,12 +278,7 @@ impl DmaEngine {
     }
 
     /// Submit an async host-to-device transfer.
-    pub fn submit_h2d(
-        &mut self,
-        dst: u64,
-        src: *const u8,
-        len: usize,
-    ) -> HwResult<u64> {
+    pub fn submit_h2d(&mut self, dst: u64, src: *const u8, len: usize) -> HwResult<u64> {
         if !self.has_capacity() {
             return Err(HwError::QueueFull);
         }
@@ -301,12 +291,7 @@ impl DmaEngine {
     }
 
     /// Submit an async device-to-host transfer.
-    pub fn submit_d2h(
-        &mut self,
-        dst: *mut u8,
-        src: u64,
-        len: usize,
-    ) -> HwResult<u64> {
+    pub fn submit_d2h(&mut self, dst: *mut u8, src: u64, len: usize) -> HwResult<u64> {
         if !self.has_capacity() {
             return Err(HwError::QueueFull);
         }
@@ -358,8 +343,7 @@ impl GpuDirect {
     /// Initializes CUDA and creates the specified number of DMA engines.
     pub fn new(device_id: i32, num_engines: usize) -> HwResult<Self> {
         // Initialize CUDA
-        crate::cuda::init()
-            .map_err(|e| HwError::InitFailed(format!("CUDA init failed: {}", e)))?;
+        crate::cuda::init().map_err(|e| HwError::InitFailed(format!("CUDA init failed: {}", e)))?;
 
         // Set the current device and create context
         let dev = crate::cuda::device_get(device_id)
@@ -481,12 +465,7 @@ impl GpuDirect {
     }
 
     /// Copy data from GPU buffer to host (synchronous).
-    pub fn gpu_to_host(
-        &self,
-        gpu_buf: &GpuBuffer,
-        host_ptr: *mut u8,
-        size: usize,
-    ) -> HwResult<()> {
+    pub fn gpu_to_host(&self, gpu_buf: &GpuBuffer, host_ptr: *mut u8, size: usize) -> HwResult<()> {
         gpu_buf.copy_to_host(host_ptr, size)
     }
 

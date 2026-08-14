@@ -4,6 +4,8 @@
 //! types that replace raw SQE/CQE across all backends.
 
 pub mod async_api;
+#[cfg(feature = "tokio")]
+pub mod async_tokio;
 pub mod backend;
 pub mod cgroup;
 pub mod error;
@@ -37,6 +39,10 @@ pub struct Torus {
     sq: SubmissionRing,
     cq: CompletionRing,
     backend: Mutex<Box<dyn Backend>>,
+    /// In-flight operation spans, keyed by `user_data`, consumed on `reap`.
+    /// Only present when the `tracing` feature is enabled.
+    #[cfg(feature = "tracing")]
+    spans: Mutex<std::collections::HashMap<u64, crate::observability::FlowSpan>>,
 }
 
 // SAFETY: Torus is thread-safe. The backend is behind a Mutex, and the rings
@@ -56,6 +62,8 @@ impl Torus {
             sq: SubmissionRing::new(ring_entries),
             cq: CompletionRing::new(ring_entries),
             backend: Mutex::new(backend),
+            #[cfg(feature = "tracing")]
+            spans: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -67,28 +75,36 @@ impl Torus {
             .unwrap()
             .submit(std::slice::from_ref(flow))?;
         if n == 0 {
-            Err(Error::SubmissionFull)
-        } else {
-            Ok(())
+            return Err(Error::SubmissionFull);
         }
+        #[cfg(feature = "tracing")]
+        {
+            self.spans
+                .lock()
+                .unwrap()
+                .insert(flow.user_data(), crate::observability::FlowSpan::new(flow));
+        }
+        Ok(())
     }
 
     /// Submit a batch of flows to the Virtual Torus.
     pub fn submit_batch(&self, flows: &[Flow]) -> Result<usize> {
-        self.backend.lock().unwrap().submit(flows)
+        let n = self.backend.lock().unwrap().submit(flows)?;
+        #[cfg(feature = "tracing")]
+        {
+            let mut spans = self.spans.lock().unwrap();
+            for flow in flows.iter().take(n) {
+                spans.insert(flow.user_data(), crate::observability::FlowSpan::new(flow));
+            }
+        }
+        Ok(n)
     }
 
     /// Submit a vectored read (readv) operation.
     ///
     /// Reads from `fd` at `offset` into multiple buffers described by `bufs`.
     /// Returns the total number of bytes read across all buffers.
-    pub fn readv(
-        &self,
-        fd: i32,
-        bufs: &[IoSlice],
-        offset: u64,
-        user_data: u64,
-    ) -> Result<()> {
+    pub fn readv(&self, fd: i32, bufs: &[IoSlice], offset: u64, user_data: u64) -> Result<()> {
         let flow = Flow::with_user_data(
             Operation::Readv {
                 fd,
@@ -105,13 +121,7 @@ impl Torus {
     ///
     /// Writes to `fd` at `offset` from multiple buffers described by `bufs`.
     /// Returns the total number of bytes written across all buffers.
-    pub fn writev(
-        &self,
-        fd: i32,
-        bufs: &[IoSlice],
-        offset: u64,
-        user_data: u64,
-    ) -> Result<()> {
+    pub fn writev(&self, fd: i32, bufs: &[IoSlice], offset: u64, user_data: u64) -> Result<()> {
         let flow = Flow::with_user_data(
             Operation::Writev {
                 fd,
@@ -126,11 +136,23 @@ impl Torus {
 
     /// Reap all available completions.
     pub fn reap(&self, results: &mut Vec<TorusResult>) -> Result<usize> {
-        self.backend.lock().unwrap().reap(results)
+        let count = self.backend.lock().unwrap().reap(results)?;
+        #[cfg(feature = "tracing")]
+        {
+            let mut spans = self.spans.lock().unwrap();
+            for r in results.iter() {
+                if let Some(span) = spans.remove(&r.user_data) {
+                    span.complete(r.result);
+                }
+            }
+        }
+        Ok(count)
     }
 
     /// Block until at least one completion is available.
     pub fn wait(&self, timeout_us: u64) -> Result<()> {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::debug_span!("torus_wait", timeout_us = timeout_us).entered();
         self.backend.lock().unwrap().wait(timeout_us)
     }
 
@@ -147,6 +169,48 @@ impl Torus {
     /// Access the virtual completion ring.
     pub fn completion_ring(&self) -> &CompletionRing {
         &self.cq
+    }
+
+    /// Register all buffers currently tracked by `registry` with the OS kernel
+    /// for zero-copy fixed-buffer I/O (io_uring `IORING_REGISTER_BUFFERS`).
+    ///
+    /// After this call, `read`/`write` operations whose buffer matches a
+    /// registered region base will be issued as `IORING_OP_READ_FIXED` /
+    /// `WRITE_FIXED`, skipping per-operation address translation in the kernel.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use tpt_torus_core::lease::LeaseRegistry;
+    /// use tpt_torus_core::Torus;
+    /// # fn make_torus() -> Torus { unimplemented!() }
+    /// let torus = make_torus();
+    /// let registry = LeaseRegistry::new();
+    /// let mut buf = vec![0u8; 4096];
+    /// unsafe { registry.register(buf.as_mut_ptr(), buf.len()) };
+    /// torus.register_leases(&registry)?; // enables IORING_OP_READ/WRITE_FIXED
+    /// # Ok::<(), tpt_torus_core::Error>(())
+    /// ```
+    ///
+    /// # Platform notes
+    /// - Linux (io_uring): registers the regions with the kernel immediately.
+    /// - Other platforms: this is a no-op (no fixed-buffer mechanism available).
+    #[cfg(unix)]
+    pub fn register_leases(&self, registry: &LeaseRegistry) -> crate::error::Result<()> {
+        let buffers = registry.as_register_buffers();
+        if buffers.is_empty() {
+            return Ok(());
+        }
+        self.backend.lock().unwrap().register_buffers(&buffers)
+    }
+
+    /// Register lease buffers with the kernel.
+    ///
+    /// No-op on platforms without a fixed-buffer mechanism. See the Unix
+    /// implementation of [`Torus::register_leases`].
+    #[cfg(not(unix))]
+    pub fn register_leases(&self, _registry: &LeaseRegistry) -> crate::error::Result<()> {
+        Ok(())
     }
 
     /// Get raw, unguarded access to the Torus, bypassing Buffer Leasing.
@@ -193,11 +257,7 @@ impl TorusPool {
     ///
     /// Each instance gets `ring_entries` SQ/CQ entries. The `make_backend`
     /// closure is called once per instance to create the platform-specific backend.
-    pub fn new<F>(
-        count: usize,
-        ring_entries: u32,
-        make_backend: F,
-    ) -> Result<Self>
+    pub fn new<F>(count: usize, ring_entries: u32, make_backend: F) -> Result<Self>
     where
         F: Fn(u32) -> Result<Box<dyn Backend>>,
     {

@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 tpt-torus-core = { path = "../tpt-torus-core", version = "0.1.0" }
+tpt-torus-sys = { path = "../tpt-torus-sys", version = "0.1.0" }
 libc = "0.2"
 libloading = { version = "0.8", optional = true }
 
@@ -29,7 +30,7 @@ harness = false
 
 [features]
 default = []
-spdk = []      # Enable SPDK integration (requires SPDK installed)
-dpdk = []      # Enable DPDK integration (requires DPDK installed)
+spdk = ["libloading"]      # Enable SPDK integration (requires SPDK installed at runtime)
+dpdk = ["libloading"]      # Enable DPDK integration (requires DPDK installed at runtime)
 gpu_direct = ["libloading"] # Enable GPU-Direct orchestration (requires CUDA)
 xdp = []       # Enable XDP integration (Linux only, no external deps needed)

@@ -197,7 +197,7 @@ fn test_gpu_direct_nvme_creation() {
 }
 
 /// Test ZeroCopyDmaPool builder configuration.
-#[cfg(all(unix, feature = "gpu_direct"))]
+#[cfg(all(target_os = "linux", feature = "gpu_direct"))]
 #[test]
 fn test_zero_copy_dma_pool_builder() {
     use tpt_torus_hw::dma_pool::DmaPoolBuilder;
@@ -214,7 +214,7 @@ fn test_zero_copy_dma_pool_builder() {
 }
 
 /// Test BufferDesc layout.
-#[cfg(all(unix, feature = "gpu_direct"))]
+#[cfg(all(target_os = "linux", feature = "gpu_direct"))]
 #[test]
 fn test_buffer_desc_layout() {
     use tpt_torus_hw::dma_pool::BufferDesc;
@@ -235,7 +235,7 @@ fn test_buffer_desc_layout() {
 }
 
 /// Test PoolStats tracking.
-#[cfg(all(unix, feature = "gpu_direct"))]
+#[cfg(all(target_os = "linux", feature = "gpu_direct"))]
 #[test]
 fn test_pool_stats() {
     use tpt_torus_hw::dma_pool::PoolStats;

@@ -21,7 +21,7 @@ cargo fmt --all -- --check                   # CI formatting gate
 cargo clippy --workspace --all-targets -- -D warnings   # CI lint gate
 ```
 
-Backend crates are platform-gated at the crate root (`#![cfg(target_os = "linux")]` etc.), so `tpt-torus-backend-uring` only builds/tests on Linux, `tpt-torus-backend-iocp` only on Windows, and `tpt-torus-backend-kqueue` only on Unix (`cfg(unix)`, covering macOS/BSD). CI (`.github/workflows/ci.yml`) runs the full matrix across `ubuntu-latest`, `windows-latest`, and `macos-latest` — a change to one backend won't be exercised locally on a different OS.
+Backend crates are platform-gated at the crate root (`#![cfg(target_os = "linux")]` etc.), so `tpt-torus-backend-uring` only builds/tests on Linux, `tpt-torus-backend-iocp` only on Windows, and `tpt-torus-backend-kqueue` only on macOS/BSD (explicit `target_os` list, not `cfg(unix)` — Linux is also `unix` but has no `kqueue`/`kevent`). CI (`.github/workflows/ci.yml`) runs the full matrix across `ubuntu-latest`, `windows-latest`, and `macos-latest` — a change to one backend won't be exercised locally on a different OS.
 
 ## Architecture
 
@@ -34,10 +34,10 @@ Backend crates are platform-gated at the crate root (`#![cfg(target_os = "linux"
   - `flow.rs` / `operation.rs` / `result.rs` — the `Flow`/`Operation`/`Result` (CQE-equivalent) types shared by every backend.
   - `rings.rs` — the virtual SQ/CQ ring structures. On Linux these fields get reused/mirrored by direct kernel mmap (see below); on other OSes they're pure user-space queues drained by a reactor thread.
   - `lease.rs` + `torus_panic.rs` — the Safe API: `LeaseRegistry` tracks registered memory regions and rejects out-of-bounds/overlapping/in-flight buffer access; a violation converts into a `TorusPanic` (`torus_panic!` macro) which aborts the process deliberately rather than letting a bad pointer reach the kernel. This is the direct implementation of the threat model in spec.txt §5.
-  - `async_api.rs` — the high-level `TorusAsync` wrapper with per-operation `Future` types (`ReadFuture`, `WriteFuture`, etc.). Each future's `poll` does submit-then-reap; note the current futures don't register real wakers with the backend (they re-poll instead of parking), so this is a scaffold, not a wakeup-correct executor integration yet.
+   - `async_api.rs` — the high-level `TorusAsync` wrapper with per-operation `Future` types (`ReadFuture`, `WriteFuture`, etc.). Each future submits its flow and registers a waker with a `WakerRegistry` keyed by `user_data`; a background reaper thread is the sole caller of `Torus::reap` and wakes the matching task on completion, so this works correctly with real async runtimes (tokio, async-std) that park tasks instead of busy-looping.
 - **`tpt-torus-backend-uring`** — Linux only. `UringBackend` calls `io_uring_setup`/`io_uring_enter` directly and `mmap`s the kernel's SQ/CQ/SQE regions (`MmapRing`), so the "virtual" ring in `tpt-torus-core` is backed by real kernel shared memory here — no reactor thread needed.
 - **`tpt-torus-backend-iocp`** — Windows only. `IocpBackend` runs a background reactor thread that calls `GetQueuedCompletionStatusEx` in a loop and pushes results into a `Mutex<VecDeque<TorusResult>>` woken via `Condvar`. Uses `windows-sys` for IOCP/Winsock/File FFI. `TorusOverlapped` carries `user_data` through the `OVERLAPPED` struct so completions can be matched back to the submitting `Flow`.
-- **`tpt-torus-backend-kqueue`** — macOS/BSD (`cfg(unix)`). Same reactor-thread pattern as IOCP, built on raw `kevent`/`kqueue` FFI declared locally in this crate (not in `tpt-torus-sys`, since kqueue's ABI is simple enough to inline). Socket I/O uses native `EVFILT_READ`/`EVFILT_WRITE`; file I/O is dispatched to a thread pool since kqueue has no native async file I/O.
+- **`tpt-torus-backend-kqueue`** — macOS/BSD (explicit `target_os` list, not `cfg(unix)`, since Linux is `unix` too but lacks `kqueue`/`kevent`). Same reactor-thread pattern as IOCP, built on raw `kevent`/`kqueue` FFI declared locally in this crate (not in `tpt-torus-sys`, since kqueue's ABI is simple enough to inline). Socket I/O uses native `EVFILT_READ`/`EVFILT_WRITE`; file I/O is dispatched to a thread pool since kqueue has no native async file I/O.
 
 ### Key invariants to preserve
 

@@ -156,6 +156,108 @@ fn test_batch_submit() {
     std::fs::remove_file(&tmpfile).ok();
 }
 
+/// `IORING_OP_RECV` multishot (`IORING_RECV_MULTISHOT`) was added in Linux
+/// 5.20. Older kernels reject the submission with `-EINVAL`, so skip the test
+/// there — it verifies a feature the running kernel can't exercise.
+fn kernel_supports_recv_multishot() -> bool {
+    if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        let mut it = release.trim().split('.');
+        let major = it.next().and_then(|s| s.parse::<u32>().ok());
+        let minor = it.next().and_then(|s| s.parse::<u32>().ok());
+        if let (Some(major), Some(minor)) = (major, minor) {
+            return (major, minor) >= (5, 20);
+        }
+    }
+    // If we can't determine the version, assume support so the test still runs.
+    true
+}
+
+/// Proves `submit_multi_recv` actually arms io_uring's multishot mode: a
+/// single submission must yield more than one completion as separate reads
+/// arrive on the same socket, without the caller re-submitting recv in
+/// between. This is a regression test for a bug where the multishot bit was
+/// written to the wrong SQE field (`op_flags` instead of `ioprio`), which
+/// silently fell back to one-shot behavior.
+#[test]
+fn test_multi_shot_recv_yields_multiple_completions() {
+    if !kernel_supports_recv_multishot() {
+        eprintln!(
+            "skipping test_multi_shot_recv_yields_multiple_completions: \
+             kernel < 5.20 lacks IORING_RECV_MULTISHOT"
+        );
+        return;
+    }
+
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+    use std::os::unix::io::AsRawFd;
+    use std::sync::mpsc;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
+    let addr = listener.local_addr().expect("local_addr failed");
+
+    let (tx_go, rx_go) = mpsc::channel::<()>();
+    let (tx_done, rx_done) = mpsc::channel::<()>();
+
+    let client = thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).expect("connect failed");
+        // Send the first chunk, then wait until the server has reaped it
+        // before sending the second, so each completion is checked against
+        // an undisturbed buffer.
+        stream.write_all(b"first!").expect("write 1 failed");
+        rx_go.recv().expect("sync recv failed");
+        stream.write_all(b"second").expect("write 2 failed");
+        tx_done.send(()).ok();
+    });
+
+    let (server_stream, _) = listener.accept().expect("accept failed");
+    let fd = server_stream.as_raw_fd();
+
+    let backend = UringBackend::new(256).expect("failed to create uring backend");
+
+    let mut buf = vec![0u8; 64];
+    backend
+        .submit_multi_recv(fd, buf.as_mut_ptr(), buf.len(), 2, 99)
+        .expect("submit_multi_recv failed");
+
+    // First completion.
+    backend.wait(5_000_000).expect("wait 1 failed");
+    let mut results = Vec::new();
+    backend.reap(&mut results).expect("reap 1 failed");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_ok(), "recv 1 failed: {}", results[0].raw());
+    assert_eq!(results[0].user_data, 99);
+    let n1 = results[0].bytes().expect("missing byte count");
+    assert_eq!(&buf[..n1], b"first!");
+
+    // The multishot op is still armed, so `in_flight` must stay non-zero even
+    // though one completion was already reaped. (This is the bug the fix
+    // addresses: previously `reap()` dropped `in_flight` to 0 after the first
+    // completion, making `wait()`'s `min_complete` heuristic return 0 and bail
+    // immediately instead of blocking for the next completion.)
+    assert_eq!(backend.in_flight(), 1);
+
+    // Let the client send the second chunk only now, then wait for the next
+    // completion without resubmitting — proves the op is still armed and that
+    // `wait()` now blocks correctly (min_complete=1) for the armed multishot op.
+    tx_go.send(()).expect("sync send failed");
+    backend.wait(5_000_000).expect("wait 2 failed");
+    let mut results = Vec::new();
+    backend.reap(&mut results).expect("reap 2 failed");
+    // The peer's socket closes when the client thread returns, so the kernel
+    // may have also queued an EOF completion (`res == 0`, no MORE bit) during
+    // the wait. Assert that the "second" payload arrived rather than requiring
+    // exactly one completion.
+    let got_second = results.iter().any(|r| {
+        r.is_ok() && r.user_data == 99 && r.bytes().is_some_and(|n| n > 0 && &buf[..n] == b"second")
+    });
+    assert!(got_second, "second completion never arrived");
+
+    rx_done.recv().expect("client join signal failed");
+    client.join().expect("client thread panicked");
+}
+
 #[test]
 fn test_in_flight_counter() {
     let backend = UringBackend::new(256).expect("failed to create uring backend");

@@ -8,6 +8,11 @@ use std::os::raw::{c_int, c_uint, c_void};
 // ─── Submission Queue Entry (io_uring_sqe) ─────────────────────────────────
 
 /// Raw io_uring submission queue entry.
+///
+/// Must be exactly 64 bytes and match the kernel's `struct io_uring_sqe`
+/// field-for-field. The trailing padding is part of the ABI: the kernel
+/// indexes the SQE array as `base + index * 64`, so getting the size wrong
+/// misaligns every entry past index 0 and corrupts submissions.
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct io_uring_sqe {
@@ -23,8 +28,11 @@ pub struct io_uring_sqe {
     pub buf_group: u16,
     pub personality: u16,
     pub splice_fd_in: i32,
-    pub __pad2: [u32; 2],
+    pub addr3: u64,
+    pub __pad2: u64,
 }
+
+const _: () = assert!(std::mem::size_of::<io_uring_sqe>() == 64);
 
 // ─── Completion Queue Entry (io_uring_cqe) ─────────────────────────────────
 
@@ -36,6 +44,47 @@ pub struct io_uring_cqe {
     pub res: i32,
     pub flags: u32,
 }
+
+// ─── Provided buffer ring (multishot recv) ────────────────────────────────
+
+/// A single entry in a provided-buffer ring.
+///
+/// Must be exactly 16 bytes and lay out as the kernel's `struct io_uring_buf`:
+/// the kernel reads `addr`/`len` to copy received data, and reports `bid` back
+/// to userspace in the upper bits of `io_uring_cqe::flags`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct io_uring_buf {
+    pub addr: u64,
+    pub len: u32,
+    pub bid: u16,
+    pub resv: u16,
+}
+
+const _: () = assert!(std::mem::size_of::<io_uring_buf>() == 16);
+
+/// Argument for `IORING_REGISTER_PBUF_RING` / `IORING_UNREGISTER_PBUF_RING`.
+///
+/// `ring_addr` points at the userspace-allocated ring buffer (an array of
+/// `io_uring_buf` preceded by a 16-byte header whose tail counter the kernel
+/// reads). `ring_entries` must be a power of two. `bgid` is the buffer group
+/// id referenced from `io_uring_sqe::buf_group` with `IOSQE_BUFFER_SELECT`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct io_uring_buf_reg {
+    pub ring_addr: u64,
+    pub ring_entries: u32,
+    pub bgid: u16,
+    pub flags: u16,
+    pub min_left: u32,
+    pub resv: [u32; 5],
+}
+
+const _: () = assert!(std::mem::size_of::<io_uring_buf_reg>() == 40);
+
+/// io_uring_register opcodes for provided-buffer rings.
+pub const IORING_REGISTER_PBUF_RING: u32 = 22;
+pub const IORING_UNREGISTER_PBUF_RING: u32 = 23;
 
 // ─── Setup Parameters ──────────────────────────────────────────────────────
 
@@ -143,6 +192,28 @@ pub mod sqe_flags {
     pub const IOSQE_BUFFER_SELECT: u8 = 1 << 5;
 }
 
+// ─── ioprio Flags (multishot accept/recv) ─────────────────────────────────
+
+/// Flags OR'd into `io_uring_sqe::ioprio` for ops that support them.
+///
+/// Multishot mode for `IORING_OP_ACCEPT`/`IORING_OP_RECV` is armed via bits in
+/// `ioprio`, not the `op_flags` union slot (which holds the normal
+/// `accept4()`/`recv()` flags).
+pub mod ioprio_flags {
+    pub const IORING_ACCEPT_MULTISHOT: u16 = 1 << 0;
+    pub const IORING_RECV_MULTISHOT: u16 = 1 << 1;
+}
+
+// ─── mmap Offsets ──────────────────────────────────────────────────────────
+
+/// Magic offsets passed to `mmap(2)` on the io_uring fd to reach each region.
+/// These are fixed kernel ABI constants, not derived from `io_uring_params`.
+pub mod mmap_offsets {
+    pub const IORING_OFF_SQ_RING: libc::off_t = 0;
+    pub const IORING_OFF_CQ_RING: libc::off_t = 0x8000000;
+    pub const IORING_OFF_SQES: libc::off_t = 0x10000000;
+}
+
 // ─── Setup Flags ───────────────────────────────────────────────────────────
 
 /// Flags for `io_uring_params::flags`.
@@ -190,54 +261,128 @@ pub mod enter_flags {
 }
 
 // ─── Syscall Declarations (Linux only) ────────────────────────────────────
+//
+// io_uring has no glibc wrapper (these are raw syscalls, normally reached via
+// liburing, which we don't link against), so they're issued directly through
+// `libc::syscall` rather than declared as `extern "C"` — there is no such
+// symbol in libc/libgcc to link against.
 
+/// Create an io_uring instance.
+///
+/// `entries` is the number of SQE entries (must be power of 2, max 4096).
+/// `params` is an in/out parameter for setup configuration.
+/// Returns a file descriptor for the io_uring instance, or `-errno` on failure.
+///
+/// # Safety
+///
+/// `params` must be a valid, non-null pointer to an `io_uring_params` the
+/// caller owns for the duration of the call.
 #[cfg(target_os = "linux")]
-extern "C" {
-    /// Create an io_uring instance.
-    ///
-    /// `entries` is the number of SQE entries (must be power of 2, max 4096).
-    /// `params` is an in/out parameter for setup configuration.
-    /// Returns a file descriptor for the io_uring instance, or `-errno` on failure.
-    pub fn io_uring_setup(entries: c_uint, params: *mut io_uring_params) -> c_int;
+pub unsafe fn io_uring_setup(entries: c_uint, params: *mut io_uring_params) -> c_int {
+    unsafe { libc::syscall(libc::SYS_io_uring_setup, entries, params) as c_int }
+}
 
-    /// Submit entries to the io_uring instance and/or wait for completions.
-    ///
-    /// `fd` is the io_uring file descriptor.
-    /// `to_submit` is the number of SQEs to submit.
-    /// `min_complete` is the minimum number of CQEs to wait for (0 = non-blocking).
-    /// `flags` is a bitmask of `enter_flags`.
-    /// Returns the number of submissions accepted, or `-errno`.
-    pub fn io_uring_enter(
-        fd: c_int,
-        to_submit: c_uint,
-        min_complete: c_uint,
-        flags: c_uint,
-        sig: *const c_void,
-    ) -> isize;
+/// Submit entries to the io_uring instance and/or wait for completions.
+///
+/// `fd` is the io_uring file descriptor.
+/// `to_submit` is the number of SQEs to submit.
+/// `min_complete` is the minimum number of CQEs to wait for (0 = non-blocking).
+/// `flags` is a bitmask of `enter_flags`.
+/// Returns the number of submissions accepted, or `-errno`.
+///
+/// # Safety
+///
+/// `fd` must be a valid io_uring file descriptor from `io_uring_setup`, and
+/// `sig` must be null or point to a valid `sigset_t` the caller owns for the
+/// duration of the call.
+#[cfg(target_os = "linux")]
+pub unsafe fn io_uring_enter(
+    fd: c_int,
+    to_submit: c_uint,
+    min_complete: c_uint,
+    flags: c_uint,
+    sig: *const c_void,
+) -> isize {
+    unsafe {
+        libc::syscall(
+            libc::SYS_io_uring_enter,
+            fd,
+            to_submit,
+            min_complete,
+            flags,
+            sig,
+            0usize,
+        ) as isize
+    }
+}
 
-    /// Register resources with the io_uring instance.
-    pub fn io_uring_register(
-        fd: c_int,
-        opcode: c_uint,
-        arg: *const c_void,
-        nr_args: c_uint,
-    ) -> c_int;
+/// Register resources with the io_uring instance.
+///
+/// # Safety
+///
+/// `fd` must be a valid io_uring file descriptor, and `arg` must be null or
+/// point to `nr_args` valid elements of whatever type `opcode` expects.
+#[cfg(target_os = "linux")]
+pub unsafe fn io_uring_register(
+    fd: c_int,
+    opcode: c_uint,
+    arg: *const c_void,
+    nr_args: c_uint,
+) -> c_int {
+    unsafe { libc::syscall(libc::SYS_io_uring_register, fd, opcode, arg, nr_args) as c_int }
+}
 
-    /// Unregister resources with the io_uring instance.
-    pub fn io_uring_unregister(fd: c_int, opcode: c_uint) -> c_int;
+/// Unregister resources with the io_uring instance.
+///
+/// This is `io_uring_register` with a null/empty argument, per the kernel ABI —
+/// there is no separate `io_uring_unregister` syscall.
+///
+/// # Safety
+///
+/// `fd` must be a valid io_uring file descriptor.
+#[cfg(target_os = "linux")]
+pub unsafe fn io_uring_unregister(fd: c_int, opcode: c_uint) -> c_int {
+    unsafe {
+        libc::syscall(
+            libc::SYS_io_uring_register,
+            fd,
+            opcode,
+            std::ptr::null::<c_void>(),
+            0u32,
+        ) as c_int
+    }
+}
 
-    /// Enter the ring and wait for events (convenience wrapper).
-    ///
-    /// This is a simplified version of `io_uring_enter` that always waits
-    /// for at least `min_complete` events.
-    pub fn io_uring_enter2(
-        fd: c_int,
-        to_submit: c_uint,
-        min_complete: c_uint,
-        flags: c_uint,
-        sig: *const c_void,
-        sz: usize,
-    ) -> isize;
+/// Enter the ring and wait for events (convenience wrapper).
+///
+/// This is the full 6-argument form of `io_uring_enter`, including the
+/// signal-mask size the kernel syscall always takes.
+///
+/// # Safety
+///
+/// `fd` must be a valid io_uring file descriptor from `io_uring_setup`, and
+/// `sig` must be null or point to a valid `sigset_t` of size `sz` that the
+/// caller owns for the duration of the call.
+#[cfg(target_os = "linux")]
+pub unsafe fn io_uring_enter2(
+    fd: c_int,
+    to_submit: c_uint,
+    min_complete: c_uint,
+    flags: c_uint,
+    sig: *const c_void,
+    sz: usize,
+) -> isize {
+    unsafe {
+        libc::syscall(
+            libc::SYS_io_uring_enter,
+            fd,
+            to_submit,
+            min_complete,
+            flags,
+            sig,
+            sz,
+        ) as isize
+    }
 }
 
 // ─── Convenience helpers (Linux only) ─────────────────────────────────────

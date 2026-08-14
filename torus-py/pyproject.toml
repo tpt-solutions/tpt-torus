@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "cffi>=1.15"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torus-py"
+version = "0.1.0"
+description = "Python bindings for TPT Torus (cross-platform async I/O with optional hardware bypass)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+keywords = ["async-io", "io_uring", "iocp", "kqueue", "nvme"]
+dependencies = ["cffi>=1.15"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["torus"]

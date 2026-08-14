@@ -62,13 +62,37 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage report
-        run: cargo tarpaulin --workspace --skip-clean --out xml --output-dir coverage
+        # Use the LLVM coverage engine (compiler instrumentation) instead of the
+        # default Ptrace backend. io_uring's mmap of the SQE array at the magic
+        # high offset fails when the test process is being ptrace'd, which makes
+        # every uring-backed test panic with "failed to mmap SQE array".
+        run: cargo tarpaulin --workspace --skip-clean --out xml --output-dir coverage --engine llvm
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: coverage/cobertura.xml
           fail_ci_if_error: false
+
+  fuzz:
+    name: Fuzz targets (bounded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Run fuzz targets (bounded)
+        working-directory: fuzz
+        run: |
+          for target in flow_creation result_parsing operation_validate; do
+            echo "Running fuzz target: $target"
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 -timeout=10
+          done
 
   msrv:
     name: MSRV check (1.87.0)

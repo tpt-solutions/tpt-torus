@@ -86,10 +86,7 @@ fn block_on<F: Future>(fut: F) -> F::Output {
 }
 
 /// Force `Pin<Box<F>>` to reuse the same `block_on` regardless of future type.
-fn pin_box<F: Future>(fut: F) -> Pin<Box<dyn Future<Output = F::Output>>>
-where
-    F: 'static,
-{
+fn pin_box<F: Future + 'static>(fut: F) -> Pin<Box<dyn Future<Output = F::Output>>> {
     Box::pin(fut)
 }
 

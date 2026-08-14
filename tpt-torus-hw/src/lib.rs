@@ -30,7 +30,7 @@
 
 #[cfg(feature = "gpu_direct")]
 pub mod cuda;
-#[cfg(all(unix, feature = "gpu_direct"))]
+#[cfg(all(target_os = "linux", feature = "gpu_direct"))]
 pub mod dma_pool;
 pub mod dpdk;
 #[cfg(feature = "gpu_direct")]
@@ -45,7 +45,7 @@ pub mod xdp;
 pub use dpdk::{Mbuf, Mempool};
 #[cfg(feature = "gpu_direct")]
 pub use gpu_direct::{GpuBuffer, GpuDirect, TransferDirection};
-pub use spdk::{NvmeCmd, NvmeNamespace};
+pub use spdk::{Controller, NvmeCmd, NvmeNamespace, Spdk, SpdkNvmeCpl, SpdkNvmeTransportId};
 
 /// Errors specific to hardware bypass operations.
 #[derive(Debug)]

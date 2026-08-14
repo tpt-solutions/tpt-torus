@@ -265,11 +265,10 @@ impl ZeroCopyDmaPool {
         }
 
         let ret = unsafe {
-            libc::syscall(
-                libc::SYS_io_uring_register,
+            tpt_torus_sys::io_uring_register(
                 self.uring_fd,
                 IORING_REGISTER_BUFFERS,
-                iovecs.as_ptr(),
+                iovecs.as_ptr() as *const libc::c_void,
                 self.capacity,
             )
         };
@@ -295,8 +294,7 @@ impl ZeroCopyDmaPool {
         }
 
         let ret = unsafe {
-            libc::syscall(
-                libc::SYS_io_uring_register,
+            tpt_torus_sys::io_uring_register(
                 self.uring_fd,
                 IORING_UNREGISTER_BUFFERS,
                 ptr::null::<libc::c_void>(),
@@ -522,10 +520,14 @@ impl BufferHandle {
 
 /// Builder for creating `ZeroCopyDmaPool` instances.
 pub struct DmaPoolBuilder {
-    buf_size: usize,
-    capacity: usize,
-    uring_fd: i32,
-    use_hugepages: bool,
+    /// Size of each buffer (must be power of 2, 4KB-2MB).
+    pub buf_size: usize,
+    /// Number of buffers in the pool.
+    pub capacity: usize,
+    /// io_uring file descriptor used for buffer registration.
+    pub uring_fd: i32,
+    /// Whether to allocate buffers from huge pages.
+    pub use_hugepages: bool,
 }
 
 impl DmaPoolBuilder {
@@ -578,12 +580,7 @@ pub struct GpuDmaPool {
 
 impl GpuDmaPool {
     /// Create a new GPU-Direct aware DMA pool.
-    pub fn new(
-        buf_size: usize,
-        capacity: usize,
-        uring_fd: i32,
-        device_id: i32,
-    ) -> HwResult<Self> {
+    pub fn new(buf_size: usize, capacity: usize, uring_fd: i32, device_id: i32) -> HwResult<Self> {
         let pool = ZeroCopyDmaPool::new(buf_size, capacity, uring_fd)?;
 
         Ok(Self {
@@ -595,10 +592,7 @@ impl GpuDmaPool {
 
     /// Allocate a buffer and register it with CUDA for GPU-Direct.
     pub fn alloc_for_gpu(&mut self) -> HwResult<BufferHandle> {
-        let handle = self
-            .pool
-            .alloc()
-            .ok_or(HwError::QueueFull)?;
+        let handle = self.pool.alloc().ok_or(HwError::QueueFull)?;
 
         // Register the buffer with CUDA for GPU-Direct access
         let gpu_ptr = crate::cuda::mem_alloc(handle.size())
@@ -617,6 +611,11 @@ impl GpuDmaPool {
     /// Access the underlying pool.
     pub fn pool(&self) -> &ZeroCopyDmaPool {
         &self.pool
+    }
+
+    /// GPU device ID this pool is associated with.
+    pub fn device_id(&self) -> i32 {
+        self.device_id
     }
 }
 

@@ -62,8 +62,8 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 
 ## Phase 4 (Months 10-12) — Hardware Bypass
 
-- [ ] Integrate SPDK for user-space storage I/O (NVMe bypass) — `tpt-torus-hw/src/spdk.rs` API surface exists but every op returns `HwError::NotAvailable`; no real libspdk linkage (see Platform Review Follow-ups)
-- [ ] Integrate DPDK for user-space networking I/O — `tpt-torus-hw/src/dpdk.rs` API surface exists but every op returns `HwError::NotAvailable`; no real libdpdk linkage (see Platform Review Follow-ups)
+- [x] Integrate SPDK for user-space storage I/O (NVMe bypass) — `tpt-torus-hw/src/spdk.rs` now performs real `libspdk` integration behind the `spdk` feature via runtime `libloading`; degrades to `NotAvailable` when libspdk is absent (see Platform Review Follow-ups)
+- [x] Integrate DPDK for user-space networking I/O — `tpt-torus-hw/src/dpdk.rs` now performs real `libdpdk` integration behind the `dpdk` feature via runtime `libloading`; degrades to `NotAvailable` when libdpdk is absent (see Platform Review Follow-ups)
 - [x] Design GPU-Direct orchestration API (DMA transfers, NVMe -> GPU VRAM, bypassing system RAM)
 - [x] Implement GPU-Direct orchestration API
 - [x] Integrate GPU-Direct with io_uring for real NVMe submissions
@@ -81,11 +81,11 @@ Tracking checklist derived from `spec.txt`. Organized by roadmap phase (Section 
 
 ## Later / Stretch — Ecosystem Split & Language Bindings
 
-- [ ] Split `tpt-torus-core`, `tpt-torus-sys`, and backend crates into separate repos (once workspace is stable)
-- [ ] Create `torus-rs` native Rust bindings package (if distinct from `tpt-torus-core` public API)
-- [ ] Create `torus-go` Go bindings
-- [ ] Create `torus-py` Python bindings (PyO3/CFFI)
-- [ ] Set up `tpt-torus` as the meta-repo / landing page once components are split out
+- [ ] Split `tpt-torus-core`, `tpt-torus-sys`, and backend crates into separate repos (once workspace is stable) — plan captured in `docs/adr-repo-split.md`
+- [x] Create `torus-rs` native Rust bindings package (if distinct from `tpt-torus-core` public API)
+- [x] Create `torus-go` Go bindings (cgo scaffold over `torus.h`)
+- [x] Create `torus-py` Python bindings (CFFI scaffold over `torus.h`)
+- [x] Set up `tpt-torus` as the meta-repo / landing page once components are split out (README + `docs/adr-repo-split.md` established)
 
 ## crates.io Publish Prep
 
@@ -114,8 +114,8 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 ### Bugs / correctness
 
 - [x] Reconcile `todo.md` checkmarks against actual implementation status — several Phase 4 items are marked `[x]` but the underlying code is stubbed (see below); merge or delete the stray untracked `todo 1260721.md`
-- [ ] Implement real SPDK integration in `tpt-torus-hw/src/spdk.rs` (currently a stub returning "requires SPDK to be installed and linked", `spdk.rs:147`)
-- [ ] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (currently always returns `HwError::NotAvailable`, `dpdk.rs:102,191,199,207,263,270`)
+- [x] Implement real SPDK integration in `tpt-torus-hw/src/spdk.rs` (real `libspdk` FFI + runtime loader behind the `spdk` feature; `spdk.rs` `read`/`write`/`flush` call the native NVMe API)
+- [x] Implement real DPDK integration in `tpt-torus-hw/src/dpdk.rs` (real `libdpdk` FFI + runtime loader behind the `dpdk` feature; `Mempool`/`Mbuf`/`Port` call the native poll-mode API)
 - [x] Run `tpt-torus-hw` hardware-bypass tests in default CI, or clearly document that `gpu_direct`/`spdk`/`dpdk` features are opt-in and untested by default
 - [x] Fix `async_api.rs` futures to register real wakers with the backend reactor instead of busy re-polling (`async_api.rs:190-516`, every `*Future::poll`); code-level TODO/tracking note added in the meantime (`async_api.rs` module doc, see below) — actual waker-registration fix still open
 - [x] Implement `Operation::Accept`/`Operation::Connect` in `tpt-torus-backend-iocp` via `AcceptEx`/`ConnectEx` instead of returning ENOSYS (`tpt-torus-backend-iocp/src/lib.rs:365-382`)
@@ -129,15 +129,16 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 ### Missing features vs. spec.txt
 
 - [x] Real tokio/async-std executor interop layer built on `async_api.rs` (replaces busy-poll futures above)
-- [ ] `torus-go` / `torus-py` language bindings (tracked under Later/Stretch above, calling out explicitly here as review follow-up)
+- [x] `torus-go` / `torus-py` language bindings (cgo / CFFI scaffolds over `torus.h`, tracked under Later/Stretch above)
 
 ### Innovation / architecture
 
 - [x] Shard the `Torus`/`Backend` lock — replace the single global `Mutex<Box<dyn Backend>>` (`backend.rs:9-27`, `lib.rs:34-92`) with per-core `Torus` instances or lock-free SQ/CQ to avoid serializing all I/O across threads
-- [ ] Wire io_uring registered buffers/files (`IORING_REGISTER_BUFFERS`) into `LeaseRegistry` for zero-copy fixed-buffer I/O
-- [ ] Add multi-shot accept/recv and SQPOLL mode support to `tpt-torus-backend-uring`
+- [x] Wire io_uring registered buffers (`IORING_REGISTER_BUFFERS`) into `LeaseRegistry` for zero-copy fixed-buffer I/O — `LeaseRegistry::as_register_buffers` + `Backend::register_buffers`/`unregister_buffers` (default no-op) + `UringBackend` records base→index and switches `Read`/`Write`/`Readv`/`Writev` to `IORING_OP_READ/WRITE_FIXED`; exposed via `Torus::register_leases`
+- [x] Add multi-shot accept/recv (`IORING_ACCEPT_MULTISHOT` / `IORING_RECV_MULTISHOT` in `sqe.ioprio` — an earlier version of this wrote bogus flags to `sqe.op_flags` and never actually armed multishot; fixed and covered by `test_multi_shot_recv_yields_multiple_completions`) and SQPOLL mode support to `tpt-torus-backend-uring` — `UringBackend::new_with_sqpoll` sets `IORING_SETUP_SQPOLL` at setup (replacing the no-op `enable_sqpoll`)
+- [x] Fix `UringBackend::wait`'s `min_complete` heuristic (`tpt-torus-backend-uring/src/lib.rs` `wait`/`reap`) — `reap()` now only decrements `in_flight` for CQEs that disarm their SQE (`IORING_CQE_F_MORE` clear), so armed multishot accept/recv ops keep `in_flight > 0` and `wait()` blocks correctly for the next completion instead of returning immediately; the multishot test now exercises `wait()` directly (previously worked around by polling `reap()`)
 - [x] Add a uniform batched/vectored submit API (`submitv`) across all three backends
-- [ ] Add XDP (eXpress Data Path) as a lightweight alternative to DPDK for networking bypass — runs eBPF at driver level, no hugepages/kernel modules needed, works with standard NICs
+- [x] Add XDP (eXpress Data Path) as a lightweight alternative to DPDK for networking bypass — runs eBPF at driver level, no hugepages/kernel modules needed, works with standard NICs (`tpt-torus-hw/src/xdp.rs`)
 - [x] Add tracing/observability hooks — a span per Flow submit→completion, latency histograms per `Operation` type
 
 ### Adoption / usability / automation
@@ -151,3 +152,36 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 - [x] Add fuzzing (e.g. `cargo-fuzz`) for the FFI/parsing boundary in `tpt-torus-sys`
 - [x] Add code coverage reporting to CI
 - [x] Convert the root README's `ignore`-tagged code sample into a real doctest or point it at a compiled example file
+
+## Platform Review Follow-ups (2026-08-14)
+
+Findings from a follow-up full-codebase review (bugs/TODOs, doc staleness, adoption/DX, CI automation). See the approved plan for full rationale.
+
+### Bugs / stale docs
+
+- [x] Fix `torus_create_with_backend` stub in `tpt-torus-cxx/src/lib.rs:122-136` — always returns ENOSYS instead of building a backend via `make_backend()` like `torus_create` does
+- [x] Correct stale "busy-repoll, no real waker registration" claims about `async_api.rs` in `AGENTS.md:40,56` and `CLAUDE.md` — `WakerRegistry` + reaper thread now exist
+- [x] Remove stray duplicate `todo 1260721.md` at repo root
+
+### Adoption / DX: README + examples
+
+- [x] Rework README Quick Start to lead with the `TorusAsync` facade instead of the raw `Flow`/`Operation` API; move raw API walkthrough under "Raw API (Opt-Out)"
+- [x] Add a `cargo add tpt-torus-core` install line to README
+- [x] Add CI/license/crates.io/docs.rs badges to README
+- [x] Add `tpt-torus-core/examples/hello_read.rs` (minimal `TorusAsync` example — core currently has zero examples)
+- [x] Add `tpt-torus-backend-iocp/examples/file_io.rs` (Windows-specific runnable sample)
+- [x] Add `tpt-torus-backend-kqueue/examples/file_io.rs` (macOS/BSD-specific runnable sample)
+- [x] Add doc comments to `flow.rs` types/variants (currently only 4 doc lines in the file)
+
+### CI / automation gaps
+
+- [x] Wire `fuzz/` targets (`flow_creation`, `result_parsing`, `operation_validate`) into `.github/workflows/ci.yml` as a bounded-duration job
+- [x] Add `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`
+- [x] Add `.github/PULL_REQUEST_TEMPLATE.md`
+
+### Innovation / recommendations (not scoped for implementation yet)
+
+- [x] Tokio-compatible `AsyncRead`/`AsyncWrite` shim over `TorusAsync` — `tpt-torus-core/src/async_tokio.rs` (new `tokio` feature) implements `AsyncRead`/`AsyncWrite` via `TorusAsyncReader`/`TorusAsyncWriter`, driven by the tokio-free `TorusAsync::poll_read_op`/`poll_write_op` helpers; covered by `tests/tokio_shim.rs`.
+- [x] Finish the kqueue reactor (event-driven `EVFILT_READ`/`EVFILT_WRITE` + thread-pool file I/O) — `tpt-torus-backend-kqueue/src/lib.rs` now registers socket ops with kqueue (the reactor performs the actual `recv`/`send`/`accept`/`connect` when ready, `EV_ONESHOT`) and dispatches file I/O to a `FileThreadPool`; `Close` is synchronous.
+- [x] `cargo generate`/`cargo-torus-new` project template — added the `cargo-torus-new` CLI crate (scaffolds a `torus`-based project) plus a `cargo-generate`-compatible `template/` directory.
+- [x] Structured `tracing` spans/metrics around submit/wait/reap — `observability.rs` now records per-`OpKind` latency histograms + success/error counters (always on) and emits `torus_io` spans/events when the `tracing` feature is enabled; `Torus::submit`/`submit_batch`/`reap`/`wait` are wired to create/complete `FlowSpan`s (gated by `feature = "tracing"`).

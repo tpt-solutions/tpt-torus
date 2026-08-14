@@ -295,6 +295,104 @@ impl TorusAsync {
             user_data: 0,
         }
     }
+
+    /// Drive a single read operation as a manual poll, persisting submission
+    /// state in the caller so the operation is submitted exactly once.
+    ///
+    /// This is the building block used by the tokio `AsyncRead` shim: it is
+    /// `tokio`-free (only `std::task::Context`) so the async facade stays
+    /// runtime-agnostic. `submitted` must be initialised to `false` and owned by
+    /// the caller across polls.
+    #[cfg(feature = "tokio")]
+    pub(crate) fn poll_read_op(
+        &self,
+        fd: i32,
+        buf: &mut [u8],
+        offset: u64,
+        user_data: &mut u64,
+        submitted: &mut bool,
+        cx: &mut Context<'_>,
+    ) -> Poll<crate::Result<usize>> {
+        if !*submitted {
+            *user_data = self.registry.alloc_id();
+            let flow = Flow::with_user_data(
+                Operation::Read {
+                    fd,
+                    buf: buf.as_mut_ptr(),
+                    len: buf.len(),
+                    offset,
+                },
+                *user_data,
+            );
+            match self.torus.submit(&flow) {
+                Ok(()) => {
+                    *submitted = true;
+                    self.registry.register(*user_data, cx.waker().clone());
+                    Poll::Pending
+                }
+                Err(e) => Poll::Ready(Err(e)),
+            }
+        } else {
+            self.registry.register(*user_data, cx.waker().clone());
+            match self.registry.take_result(*user_data) {
+                Some(result) => {
+                    self.registry.unregister(*user_data);
+                    if result.is_ok() {
+                        Poll::Ready(Ok(result.bytes().unwrap_or(0)))
+                    } else {
+                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                    }
+                }
+                None => Poll::Pending,
+            }
+        }
+    }
+
+    /// Drive a single write operation as a manual poll (see [`TorusAsync::poll_read_op`]).
+    #[cfg(feature = "tokio")]
+    pub(crate) fn poll_write_op(
+        &self,
+        fd: i32,
+        buf: &[u8],
+        offset: u64,
+        user_data: &mut u64,
+        submitted: &mut bool,
+        cx: &mut Context<'_>,
+    ) -> Poll<crate::Result<usize>> {
+        if !*submitted {
+            *user_data = self.registry.alloc_id();
+            let flow = Flow::with_user_data(
+                Operation::Write {
+                    fd,
+                    buf: buf.as_ptr(),
+                    len: buf.len(),
+                    offset,
+                },
+                *user_data,
+            );
+            match self.torus.submit(&flow) {
+                Ok(()) => {
+                    *submitted = true;
+                    self.registry.register(*user_data, cx.waker().clone());
+                    Poll::Pending
+                }
+                Err(e) => Poll::Ready(Err(e)),
+            }
+        } else {
+            self.registry.register(*user_data, cx.waker().clone());
+            match self.registry.take_result(*user_data) {
+                Some(result) => {
+                    self.registry.unregister(*user_data);
+                    if result.is_ok() {
+                        Poll::Ready(Ok(result.bytes().unwrap_or(0)))
+                    } else {
+                        Poll::Ready(Err(crate::Error::Os(result.error().unwrap_or(5))))
+                    }
+                }
+                None => Poll::Pending,
+            }
+        }
+    }
 }
 
 // ─── Shared future state ────────────────────────────────────────────────────
@@ -752,8 +850,7 @@ impl<'a> Future for CloseFuture<'a> {
         match this.state {
             FutureState::Init => {
                 this.user_data = this.registry.alloc_id();
-                let flow =
-                    Flow::with_user_data(Operation::Close { fd: this.fd }, this.user_data);
+                let flow = Flow::with_user_data(Operation::Close { fd: this.fd }, this.user_data);
 
                 match this.torus.submit(&flow) {
                     Ok(()) => {

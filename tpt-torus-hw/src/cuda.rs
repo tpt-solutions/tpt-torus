@@ -83,7 +83,8 @@ struct CudaApi {
     cuMemcpyHtoD: unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> CUresult,
     cuMemcpyDtoH: unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> CUresult,
     cuMemcpyDtoD: unsafe extern "C" fn(CUdeviceptr, CUdeviceptr, usize) -> CUresult,
-    cuMemcpyHtoDAsync: unsafe extern "C" fn(CUdeviceptr, *const c_void, usize, CUstream) -> CUresult,
+    cuMemcpyHtoDAsync:
+        unsafe extern "C" fn(CUdeviceptr, *const c_void, usize, CUstream) -> CUresult,
     cuMemcpyDtoHAsync: unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize, CUstream) -> CUresult,
     cuMemcpyDtoDAsync: unsafe extern "C" fn(CUdeviceptr, CUdeviceptr, usize, CUstream) -> CUresult,
     cuStreamCreate: unsafe extern "C" fn(*mut CUstream, c_uint) -> CUresult,
@@ -116,10 +117,7 @@ fn load_cuda() -> Result<&'static CudaApi, crate::HwError> {
 
     macro_rules! load_fn {
         ($lib:expr, $name:ident, $ty:ty) => {{
-            let sym = unsafe {
-                $lib.get::<$ty>(stringify!($name).as_bytes())
-            }
-            .map_err(|e| {
+            let sym = unsafe { $lib.get::<$ty>(stringify!($name).as_bytes()) }.map_err(|e| {
                 crate::HwError::NotAvailable(format!(
                     "CUDA symbol {} not found: {}",
                     stringify!($name),
@@ -132,32 +130,132 @@ fn load_cuda() -> Result<&'static CudaApi, crate::HwError> {
 
     let api = CudaApi {
         cuInit: load_fn!(lib, cuInit, unsafe extern "C" fn(c_uint) -> CUresult),
-        cuDeviceGetCount: load_fn!(lib, cuDeviceGetCount, unsafe extern "C" fn(*mut c_int) -> CUresult),
-        cuDeviceGet: load_fn!(lib, cuDeviceGet, unsafe extern "C" fn(*mut CUdevice, c_int) -> CUresult),
-        cuDeviceGetName: load_fn!(lib, cuDeviceGetName, unsafe extern "C" fn(*mut i8, c_int, CUdevice) -> CUresult),
-        cuDeviceTotalMem: load_fn!(lib, cuDeviceTotalMem, unsafe extern "C" fn(*mut usize, CUdevice) -> CUresult),
-        cuCtxCreate: load_fn!(lib, cuCtxCreate, unsafe extern "C" fn(*mut CUcontext, c_uint, CUdevice) -> CUresult),
-        cuCtxDestroy: load_fn!(lib, cuCtxDestroy, unsafe extern "C" fn(CUcontext) -> CUresult),
-        cuCtxSetCurrent: load_fn!(lib, cuCtxSetCurrent, unsafe extern "C" fn(CUcontext) -> CUresult),
+        cuDeviceGetCount: load_fn!(
+            lib,
+            cuDeviceGetCount,
+            unsafe extern "C" fn(*mut c_int) -> CUresult
+        ),
+        cuDeviceGet: load_fn!(
+            lib,
+            cuDeviceGet,
+            unsafe extern "C" fn(*mut CUdevice, c_int) -> CUresult
+        ),
+        cuDeviceGetName: load_fn!(
+            lib,
+            cuDeviceGetName,
+            unsafe extern "C" fn(*mut i8, c_int, CUdevice) -> CUresult
+        ),
+        cuDeviceTotalMem: load_fn!(
+            lib,
+            cuDeviceTotalMem,
+            unsafe extern "C" fn(*mut usize, CUdevice) -> CUresult
+        ),
+        cuCtxCreate: load_fn!(
+            lib,
+            cuCtxCreate,
+            unsafe extern "C" fn(*mut CUcontext, c_uint, CUdevice) -> CUresult
+        ),
+        cuCtxDestroy: load_fn!(
+            lib,
+            cuCtxDestroy,
+            unsafe extern "C" fn(CUcontext) -> CUresult
+        ),
+        cuCtxSetCurrent: load_fn!(
+            lib,
+            cuCtxSetCurrent,
+            unsafe extern "C" fn(CUcontext) -> CUresult
+        ),
         cuCtxSynchronize: load_fn!(lib, cuCtxSynchronize, unsafe extern "C" fn() -> CUresult),
-        cuMemAlloc: load_fn!(lib, cuMemAlloc, unsafe extern "C" fn(*mut CUdeviceptr, usize) -> CUresult),
-        cuMemFree: load_fn!(lib, cuMemFree, unsafe extern "C" fn(CUdeviceptr) -> CUresult),
-        cuMemHostAlloc: load_fn!(lib, cuMemHostAlloc, unsafe extern "C" fn(*mut *mut c_void, usize, c_uint) -> CUresult),
-        cuMemFreeHost: load_fn!(lib, cuMemFreeHost, unsafe extern "C" fn(*mut c_void) -> CUresult),
-        cuMemcpyHtoD: load_fn!(lib, cuMemcpyHtoD, unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> CUresult),
-        cuMemcpyDtoH: load_fn!(lib, cuMemcpyDtoH, unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> CUresult),
-        cuMemcpyDtoD: load_fn!(lib, cuMemcpyDtoD, unsafe extern "C" fn(CUdeviceptr, CUdeviceptr, usize) -> CUresult),
-        cuMemcpyHtoDAsync: load_fn!(lib, cuMemcpyHtoDAsync, unsafe extern "C" fn(CUdeviceptr, *const c_void, usize, CUstream) -> CUresult),
-        cuMemcpyDtoHAsync: load_fn!(lib, cuMemcpyDtoHAsync, unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize, CUstream) -> CUresult),
-        cuMemcpyDtoDAsync: load_fn!(lib, cuMemcpyDtoDAsync, unsafe extern "C" fn(CUdeviceptr, CUdeviceptr, usize, CUstream) -> CUresult),
-        cuStreamCreate: load_fn!(lib, cuStreamCreate, unsafe extern "C" fn(*mut CUstream, c_uint) -> CUresult),
-        cuStreamDestroy: load_fn!(lib, cuStreamDestroy, unsafe extern "C" fn(CUstream) -> CUresult),
-        cuStreamSynchronize: load_fn!(lib, cuStreamSynchronize, unsafe extern "C" fn(CUstream) -> CUresult),
-        cuEventCreate: load_fn!(lib, cuEventCreate, unsafe extern "C" fn(*mut CUevent, c_uint) -> CUresult),
-        cuEventDestroy: load_fn!(lib, cuEventDestroy, unsafe extern "C" fn(CUevent) -> CUresult),
-        cuEventRecord: load_fn!(lib, cuEventRecord, unsafe extern "C" fn(CUevent, CUstream) -> CUresult),
-        cuEventSynchronize: load_fn!(lib, cuEventSynchronize, unsafe extern "C" fn(CUevent) -> CUresult),
-        cuEventElapsedTime: load_fn!(lib, cuEventElapsedTime, unsafe extern "C" fn(*mut f32, CUevent, CUevent) -> CUresult),
+        cuMemAlloc: load_fn!(
+            lib,
+            cuMemAlloc,
+            unsafe extern "C" fn(*mut CUdeviceptr, usize) -> CUresult
+        ),
+        cuMemFree: load_fn!(
+            lib,
+            cuMemFree,
+            unsafe extern "C" fn(CUdeviceptr) -> CUresult
+        ),
+        cuMemHostAlloc: load_fn!(
+            lib,
+            cuMemHostAlloc,
+            unsafe extern "C" fn(*mut *mut c_void, usize, c_uint) -> CUresult
+        ),
+        cuMemFreeHost: load_fn!(
+            lib,
+            cuMemFreeHost,
+            unsafe extern "C" fn(*mut c_void) -> CUresult
+        ),
+        cuMemcpyHtoD: load_fn!(
+            lib,
+            cuMemcpyHtoD,
+            unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> CUresult
+        ),
+        cuMemcpyDtoH: load_fn!(
+            lib,
+            cuMemcpyDtoH,
+            unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> CUresult
+        ),
+        cuMemcpyDtoD: load_fn!(
+            lib,
+            cuMemcpyDtoD,
+            unsafe extern "C" fn(CUdeviceptr, CUdeviceptr, usize) -> CUresult
+        ),
+        cuMemcpyHtoDAsync: load_fn!(
+            lib,
+            cuMemcpyHtoDAsync,
+            unsafe extern "C" fn(CUdeviceptr, *const c_void, usize, CUstream) -> CUresult
+        ),
+        cuMemcpyDtoHAsync: load_fn!(
+            lib,
+            cuMemcpyDtoHAsync,
+            unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize, CUstream) -> CUresult
+        ),
+        cuMemcpyDtoDAsync: load_fn!(
+            lib,
+            cuMemcpyDtoDAsync,
+            unsafe extern "C" fn(CUdeviceptr, CUdeviceptr, usize, CUstream) -> CUresult
+        ),
+        cuStreamCreate: load_fn!(
+            lib,
+            cuStreamCreate,
+            unsafe extern "C" fn(*mut CUstream, c_uint) -> CUresult
+        ),
+        cuStreamDestroy: load_fn!(
+            lib,
+            cuStreamDestroy,
+            unsafe extern "C" fn(CUstream) -> CUresult
+        ),
+        cuStreamSynchronize: load_fn!(
+            lib,
+            cuStreamSynchronize,
+            unsafe extern "C" fn(CUstream) -> CUresult
+        ),
+        cuEventCreate: load_fn!(
+            lib,
+            cuEventCreate,
+            unsafe extern "C" fn(*mut CUevent, c_uint) -> CUresult
+        ),
+        cuEventDestroy: load_fn!(
+            lib,
+            cuEventDestroy,
+            unsafe extern "C" fn(CUevent) -> CUresult
+        ),
+        cuEventRecord: load_fn!(
+            lib,
+            cuEventRecord,
+            unsafe extern "C" fn(CUevent, CUstream) -> CUresult
+        ),
+        cuEventSynchronize: load_fn!(
+            lib,
+            cuEventSynchronize,
+            unsafe extern "C" fn(CUevent) -> CUresult
+        ),
+        cuEventElapsedTime: load_fn!(
+            lib,
+            cuEventElapsedTime,
+            unsafe extern "C" fn(*mut f32, CUevent, CUevent) -> CUresult
+        ),
         _lib: lib,
     };
 
@@ -189,7 +287,10 @@ pub fn device_count() -> Result<i32, crate::HwError> {
     if result.is_ok() {
         Ok(count)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuDeviceGetCount: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuDeviceGetCount: {}",
+            result
+        )))
     }
 }
 
@@ -201,7 +302,10 @@ pub fn device_get(ordinal: i32) -> Result<CUdevice, crate::HwError> {
     if result.is_ok() {
         Ok(device)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuDeviceGet: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuDeviceGet: {}",
+            result
+        )))
     }
 }
 
@@ -214,7 +318,10 @@ pub fn device_name(device: CUdevice) -> Result<String, crate::HwError> {
         let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) };
         Ok(name.to_string_lossy().into_owned())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuDeviceGetName: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuDeviceGetName: {}",
+            result
+        )))
     }
 }
 
@@ -226,7 +333,10 @@ pub fn device_total_mem(device: CUdevice) -> Result<usize, crate::HwError> {
     if result.is_ok() {
         Ok(bytes)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuDeviceTotalMem: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuDeviceTotalMem: {}",
+            result
+        )))
     }
 }
 
@@ -238,7 +348,52 @@ pub fn ctx_create(device: CUdevice) -> Result<CUcontext, crate::HwError> {
     if result.is_ok() {
         Ok(ctx)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuCtxCreate: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxCreate: {}",
+            result
+        )))
+    }
+}
+
+/// Destroy a CUDA context.
+pub fn ctx_destroy(ctx: CUcontext) -> Result<(), crate::HwError> {
+    let api = load_cuda()?;
+    let result = unsafe { (api.cuCtxDestroy)(ctx) };
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxDestroy: {}",
+            result
+        )))
+    }
+}
+
+/// Set the current CUDA context.
+pub fn ctx_set_current(ctx: CUcontext) -> Result<(), crate::HwError> {
+    let api = load_cuda()?;
+    let result = unsafe { (api.cuCtxSetCurrent)(ctx) };
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxSetCurrent: {}",
+            result
+        )))
+    }
+}
+
+/// Synchronize the current CUDA context.
+pub fn ctx_synchronize() -> Result<(), crate::HwError> {
+    let api = load_cuda()?;
+    let result = unsafe { (api.cuCtxSynchronize)() };
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(crate::HwError::InitFailed(format!(
+            "cuCtxSynchronize: {}",
+            result
+        )))
     }
 }
 
@@ -250,7 +405,10 @@ pub fn mem_alloc(size: usize) -> Result<CUdeviceptr, crate::HwError> {
     if result.is_ok() {
         Ok(dptr)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemAlloc: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemAlloc: {}",
+            result
+        )))
     }
 }
 
@@ -272,7 +430,10 @@ pub fn memcpy_h2d(dst: CUdeviceptr, src: *const u8, size: usize) -> Result<(), c
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemcpyHtoD: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemcpyHtoD: {}",
+            result
+        )))
     }
 }
 
@@ -283,7 +444,10 @@ pub fn memcpy_d2h(dst: *mut u8, src: CUdeviceptr, size: usize) -> Result<(), cra
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemcpyDtoH: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemcpyDtoH: {}",
+            result
+        )))
     }
 }
 
@@ -294,7 +458,10 @@ pub fn memcpy_d2d(dst: CUdeviceptr, src: CUdeviceptr, size: usize) -> Result<(),
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemcpyDtoD: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemcpyDtoD: {}",
+            result
+        )))
     }
 }
 
@@ -302,13 +469,15 @@ pub fn memcpy_d2d(dst: CUdeviceptr, src: CUdeviceptr, size: usize) -> Result<(),
 pub fn mem_host_alloc(size: usize) -> Result<*mut u8, crate::HwError> {
     let api = load_cuda()?;
     let mut ptr: *mut u8 = std::ptr::null_mut();
-    let result = unsafe {
-        (api.cuMemHostAlloc)(&mut ptr as *mut *mut u8 as *mut *mut c_void, size, 0)
-    };
+    let result =
+        unsafe { (api.cuMemHostAlloc)(&mut ptr as *mut *mut u8 as *mut *mut c_void, size, 0) };
     if result.is_ok() {
         Ok(ptr)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemHostAlloc: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemHostAlloc: {}",
+            result
+        )))
     }
 }
 
@@ -319,7 +488,10 @@ pub fn mem_free_host(ptr: *mut u8, _size: usize) -> Result<(), crate::HwError> {
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemFreeHost: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemFreeHost: {}",
+            result
+        )))
     }
 }
 
@@ -335,7 +507,10 @@ pub fn memcpy_h2d_async(
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemcpyHtoDAsync: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemcpyHtoDAsync: {}",
+            result
+        )))
     }
 }
 
@@ -351,7 +526,10 @@ pub fn memcpy_d2h_async(
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemcpyDtoHAsync: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemcpyDtoHAsync: {}",
+            result
+        )))
     }
 }
 
@@ -367,7 +545,10 @@ pub fn memcpy_d2d_async(
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuMemcpyDtoDAsync: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuMemcpyDtoDAsync: {}",
+            result
+        )))
     }
 }
 
@@ -379,7 +560,10 @@ pub fn stream_create() -> Result<CUstream, crate::HwError> {
     if result.is_ok() {
         Ok(stream)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuStreamCreate: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuStreamCreate: {}",
+            result
+        )))
     }
 }
 
@@ -390,7 +574,10 @@ pub fn stream_destroy(stream: CUstream) -> Result<(), crate::HwError> {
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuStreamDestroy: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuStreamDestroy: {}",
+            result
+        )))
     }
 }
 
@@ -401,7 +588,10 @@ pub fn stream_synchronize(stream: CUstream) -> Result<(), crate::HwError> {
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuStreamSynchronize: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuStreamSynchronize: {}",
+            result
+        )))
     }
 }
 
@@ -413,7 +603,10 @@ pub fn event_create() -> Result<CUevent, crate::HwError> {
     if result.is_ok() {
         Ok(event)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuEventCreate: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuEventCreate: {}",
+            result
+        )))
     }
 }
 
@@ -424,7 +617,10 @@ pub fn event_destroy(event: CUevent) -> Result<(), crate::HwError> {
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuEventDestroy: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuEventDestroy: {}",
+            result
+        )))
     }
 }
 
@@ -435,7 +631,10 @@ pub fn event_record(event: CUevent, stream: CUstream) -> Result<(), crate::HwErr
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuEventRecord: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuEventRecord: {}",
+            result
+        )))
     }
 }
 
@@ -446,7 +645,10 @@ pub fn event_synchronize(event: CUevent) -> Result<(), crate::HwError> {
     if result.is_ok() {
         Ok(())
     } else {
-        Err(crate::HwError::InitFailed(format!("cuEventSynchronize: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuEventSynchronize: {}",
+            result
+        )))
     }
 }
 
@@ -458,6 +660,9 @@ pub fn event_elapsed(start: CUevent, end: CUevent) -> Result<f32, crate::HwError
     if result.is_ok() {
         Ok(ms)
     } else {
-        Err(crate::HwError::InitFailed(format!("cuEventElapsedTime: {}", result)))
+        Err(crate::HwError::InitFailed(format!(
+            "cuEventElapsedTime: {}",
+            result
+        )))
     }
 }
