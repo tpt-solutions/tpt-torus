@@ -143,7 +143,7 @@ Findings from a full-codebase review; see `spec.txt` §5 for the threat model th
 
 ### Adoption / usability / automation
 
-- [x] Add workspace-level runnable examples covering all three backends (e.g. `examples/echo_server.rs`, `examples/file_copy.rs`) — currently only one example exists (`tpt-torus-backend-uring/examples/file_io.rs`, Linux-only)
+- [x] Add workspace-level runnable examples covering all three backends (e.g. `examples/echo_server.rs`, `examples/file_copy.rs`) — currently only one example exists (`tpt-torus-backend-uring/examples/uring_file_io.rs`, Linux-only)
 - [x] Add a minimal `TorusAsync` example (caveat as scaffold until the waker fix above lands)
 - [x] Add `CONTRIBUTING.md`
 - [x] Add `CHANGELOG.md`
@@ -169,8 +169,8 @@ Findings from a follow-up full-codebase review (bugs/TODOs, doc staleness, adopt
 - [x] Add a `cargo add tpt-torus-core` install line to README
 - [x] Add CI/license/crates.io/docs.rs badges to README
 - [x] Add `tpt-torus-core/examples/hello_read.rs` (minimal `TorusAsync` example — core currently has zero examples)
-- [x] Add `tpt-torus-backend-iocp/examples/file_io.rs` (Windows-specific runnable sample)
-- [x] Add `tpt-torus-backend-kqueue/examples/file_io.rs` (macOS/BSD-specific runnable sample)
+- [x] Add `tpt-torus-backend-iocp/examples/iocp_file_io.rs` (Windows-specific runnable sample)
+- [x] Add `tpt-torus-backend-kqueue/examples/kqueue_file_io.rs` (macOS/BSD-specific runnable sample)
 - [x] Add doc comments to `flow.rs` types/variants (currently only 4 doc lines in the file)
 
 ### CI / automation gaps

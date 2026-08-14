@@ -15,19 +15,19 @@ libfuzzer-sys = "0.4"
 path = "../tpt-torus-core"
 
 [[bin]]
-name = "fuzz_flow creation"
+name = "flow_creation"
 path = "fuzz_targets/flow_creation.rs"
 test = false
 doc = false
 
 [[bin]]
-name = "fuzz_result parsing"
+name = "result_parsing"
 path = "fuzz_targets/result_parsing.rs"
 test = false
 doc = false
 
 [[bin]]
-name = "fuzz_operation validate"
+name = "operation_validate"
 path = "fuzz_targets/operation_validate.rs"
 test = false
 doc = false
