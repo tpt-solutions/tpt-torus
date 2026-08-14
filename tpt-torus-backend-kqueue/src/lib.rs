@@ -670,7 +670,8 @@ impl Backend for KqueueBackend {
             }
         }
 
-        self.in_flight.fetch_add(submitted as u32, Ordering::Relaxed);
+        self.in_flight
+            .fetch_add(submitted as u32, Ordering::Relaxed);
         Ok(submitted as usize)
     }
 

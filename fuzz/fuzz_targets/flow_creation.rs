@@ -9,17 +9,17 @@ use tpt_torus_core::flow::Flow;
 use tpt_torus_core::operation::Operation;
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() < 4 {
+    if data.len() < 8 {
         return;
     }
 
     let op_type = data[0] % 7; // 7 operation variants
-    let fd = i32::from_ne_bytes([data[1], data[2], data[3], data[4 % data.len()]]);
+    let fd = i32::from_ne_bytes([data[1], data[2], data[3], data[4]]);
 
     let buf_ptr = data.as_ptr() as *mut u8;
     let len = data.len();
     let offset = u64::from_ne_bytes([
-        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7 % data.len()],
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
     ]);
 
     let operation = match op_type {
@@ -41,7 +41,10 @@ fuzz_target!(|data: &[u8]| {
         _ => unreachable!(),
     };
 
-    let _flow = Flow::with_user_data(operation, u64::from_ne_bytes([
-        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7 % data.len()],
-    ]));
+    let _flow = Flow::with_user_data(
+        operation,
+        u64::from_ne_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]),
+    );
 });
