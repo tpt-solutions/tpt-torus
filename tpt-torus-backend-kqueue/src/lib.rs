@@ -77,13 +77,13 @@ struct KEvent {
 
 impl Default for KEvent {
     fn default() -> Self {
-        Self {
+        KEvent {
             ident: 0,
             filter: 0,
             flags: 0,
             fflags: 0,
             data: 0,
-            udata: ptr::null_mut(),
+            udata: std::ptr::null_mut(),
         }
     }
 }
@@ -411,10 +411,14 @@ impl KqueueBackend {
                 continue;
             }
 
-            for event in events.iter().take(n as usize) {
-                let ctx_ptr = event.udata as *mut OpCtx;
-                if ctx_ptr.is_null() {
-                    continue;
+            {
+                let mut cq = completions.lock().unwrap();
+                for event in events.iter().take(n as usize) {
+                    let udata = event.udata as *const TorusResult;
+                    if !udata.is_null() {
+                        let result = unsafe { &*udata };
+                        cq.push_back(TorusResult::new(result.result, result.user_data));
+                    }
                 }
                 // Reclaim ownership of the context allocated at submit time.
                 let ctx = unsafe { Box::from_raw(ctx_ptr) };
@@ -485,6 +489,62 @@ impl KqueueBackend {
         self.completions.lock().unwrap().push_back(result);
         self.notify.notify_one();
     }
+
+    /// Register a file descriptor for read events.
+    fn register_read(&self, fd: libc::c_int, user_data: u64) {
+        let event = KEvent {
+            ident: fd as usize,
+            filter: EVFILT_READ,
+            flags: EV_ADD | EV_ENABLE | EV_CLEAR,
+            fflags: 0,
+            data: 0,
+            udata: Box::into_raw(Box::new(TorusResult::new(0, user_data))) as *mut _,
+        };
+        unsafe {
+            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
+        }
+    }
+
+    /// Register a file descriptor for write events.
+    fn register_write(&self, fd: libc::c_int, user_data: u64) {
+        let event = KEvent {
+            ident: fd as usize,
+            filter: EVFILT_WRITE,
+            flags: EV_ADD | EV_ENABLE | EV_CLEAR,
+            fflags: 0,
+            data: 0,
+            udata: Box::into_raw(Box::new(TorusResult::new(0, user_data))) as *mut _,
+        };
+        unsafe {
+            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
+        }
+    }
+
+    /// Unregister a file descriptor.
+    fn unregister(&self, fd: libc::c_int) {
+        let event = KEvent {
+            ident: fd as usize,
+            filter: EVFILT_READ,
+            flags: EV_DELETE,
+            fflags: 0,
+            data: 0,
+            udata: ptr::null_mut(),
+        };
+        unsafe {
+            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
+        }
+        let event = KEvent {
+            ident: fd as usize,
+            filter: EVFILT_WRITE,
+            flags: EV_DELETE,
+            fflags: 0,
+            data: 0,
+            udata: ptr::null_mut(),
+        };
+        unsafe {
+            kevent(self.kq, &event, 1, ptr::null_mut(), 0, ptr::null());
+        }
+    }
 }
 
 impl Backend for KqueueBackend {
@@ -516,17 +576,76 @@ impl Backend for KqueueBackend {
                     len,
                     offset,
                 } => {
-                    self.file_pool.submit(FileJob {
-                        fd: *fd,
-                        kind: FileJobKind::Write {
-                            buf: *buf,
-                            len: *len,
-                            offset: *offset,
-                        },
-                        user_data: flow.user_data(),
-                        completions: self.completions.clone(),
-                        notify: self.notify.clone(),
-                    });
+                    let fd = *fd;
+                    let buf = *buf;
+                    let len = *len;
+                    let offset = *offset;
+                    let user_data = flow.user_data();
+
+                    self.register_write(fd, user_data);
+
+                    // For file I/O, do a synchronous write
+                    let result = unsafe {
+                        libc::pwrite(fd, buf as *const libc::c_void, len, offset as libc::off_t)
+                    };
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
+                Operation::Accept { fd, addr, addrlen } => {
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+
+                    self.register_read(fd, user_data);
+
+                    // Synchronous accept
+                    let result =
+                        unsafe { libc::accept(fd, *addr, *addrlen as *mut libc::socklen_t) };
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
+                Operation::Connect { fd, addr, addrlen } => {
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+
+                    self.register_write(fd, user_data);
+
+                    // Synchronous connect
+                    let result = unsafe { libc::connect(fd, *addr, *addrlen as libc::socklen_t) };
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
+                Operation::Recv { fd, buf, len } => {
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+
+                    self.register_read(fd, user_data);
+
+                    // Synchronous recv
+                    let result = unsafe { libc::recv(fd, *buf as *mut libc::c_void, *len, 0) };
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
+                Operation::Send { fd, buf, len } => {
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+
+                    self.register_write(fd, user_data);
+
+                    // Synchronous send
+                    let result = unsafe { libc::send(fd, *buf as *const libc::c_void, *len, 0) };
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
+                }
+                Operation::Close { fd } => {
+                    let user_data = flow.user_data();
+                    let result = unsafe { libc::close(*fd) };
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    submitted += 1;
                 }
                 Operation::Readv {
                     fd,
@@ -534,17 +653,34 @@ impl Backend for KqueueBackend {
                     buf_count,
                     offset,
                 } => {
-                    self.file_pool.submit(FileJob {
-                        fd: *fd,
-                        kind: FileJobKind::Readv {
-                            bufs: *bufs,
-                            buf_count: *buf_count,
-                            offset: *offset,
-                        },
-                        user_data: flow.user_data(),
-                        completions: self.completions.clone(),
-                        notify: self.notify.clone(),
-                    });
+                    // Vectored read: use preadv for file I/O (kqueue doesn't support async file I/O)
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+
+                    // Convert to iovec for preadv
+                    let iovecs: Vec<libc::iovec> = bufs_slice
+                        .iter()
+                        .map(|b| libc::iovec {
+                            iov_base: b.buf as *mut libc::c_void,
+                            iov_len: b.len,
+                        })
+                        .collect();
+
+                    let result = unsafe {
+                        libc::preadv(
+                            fd,
+                            iovecs.as_ptr(),
+                            iovecs.len() as i32,
+                            *offset as libc::off_t,
+                        )
+                    };
+
+                    self.register_read(fd, user_data);
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
                 }
                 Operation::Writev {
                     fd,
@@ -552,114 +688,39 @@ impl Backend for KqueueBackend {
                     buf_count,
                     offset,
                 } => {
-                    self.file_pool.submit(FileJob {
-                        fd: *fd,
-                        kind: FileJobKind::Writev {
-                            bufs: *bufs,
-                            buf_count: *buf_count,
-                            offset: *offset,
-                        },
-                        user_data: flow.user_data(),
-                        completions: self.completions.clone(),
-                        notify: self.notify.clone(),
-                    });
-                }
-                Operation::Recv { fd, buf, len } => {
-                    let ctx = Box::into_raw(Box::new(OpCtx {
-                        user_data: flow.user_data(),
-                        op: SocketOp::Recv {
-                            fd: *fd,
-                            buf: *buf,
-                            len: *len,
-                        },
-                    }));
-                    if self.register_socket(*fd, EVFILT_READ, ctx).is_none() {
-                        unsafe {
-                            drop(Box::from_raw(ctx));
-                        }
-                        self.post_completion(TorusResult::new(
-                            -(std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64),
-                            flow.user_data(),
-                        ));
-                    }
-                }
-                Operation::Send { fd, buf, len } => {
-                    let ctx = Box::into_raw(Box::new(OpCtx {
-                        user_data: flow.user_data(),
-                        op: SocketOp::Send {
-                            fd: *fd,
-                            buf: *buf,
-                            len: *len,
-                        },
-                    }));
-                    if self.register_socket(*fd, EVFILT_WRITE, ctx).is_none() {
-                        unsafe {
-                            drop(Box::from_raw(ctx));
-                        }
-                        self.post_completion(TorusResult::new(
-                            -(std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64),
-                            flow.user_data(),
-                        ));
-                    }
-                }
-                Operation::Accept { fd, addr, addrlen } => {
-                    let ctx = Box::into_raw(Box::new(OpCtx {
-                        user_data: flow.user_data(),
-                        op: SocketOp::Accept {
-                            listen_fd: *fd,
-                            addr: *addr,
-                            addrlen: *addrlen,
-                        },
-                    }));
-                    if self.register_socket(*fd, EVFILT_READ, ctx).is_none() {
-                        unsafe {
-                            drop(Box::from_raw(ctx));
-                        }
-                        self.post_completion(TorusResult::new(
-                            -(std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64),
-                            flow.user_data(),
-                        ));
-                    }
-                }
-                Operation::Connect { fd, addr, addrlen } => {
-                    let r = unsafe { libc::connect(*fd, *addr, *addrlen as libc::socklen_t) };
-                    if r == 0 {
-                        // Connected immediately.
-                        self.post_completion(TorusResult::new(0, flow.user_data()));
-                    } else {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(5);
-                        if err == libc::EINPROGRESS {
-                            // Async connect in progress: wait for writable.
-                            let ctx = Box::into_raw(Box::new(OpCtx {
-                                user_data: flow.user_data(),
-                                op: SocketOp::Connect { fd: *fd },
-                            }));
-                            if self.register_socket(*fd, EVFILT_WRITE, ctx).is_none() {
-                                unsafe {
-                                    drop(Box::from_raw(ctx));
-                                }
-                                self.post_completion(TorusResult::new(
-                                    (-err) as i64,
-                                    flow.user_data(),
-                                ));
-                            }
-                        } else {
-                            self.post_completion(TorusResult::new((-err) as i64, flow.user_data()));
-                        }
-                    }
-                }
-                Operation::Close { fd } => {
-                    let result = unsafe { libc::close(*fd) };
-                    self.post_completion(TorusResult::new(result as i64, flow.user_data()));
+                    // Vectored write: use pwritev for file I/O
+                    let fd = *fd;
+                    let user_data = flow.user_data();
+                    let bufs_slice =
+                        unsafe { std::slice::from_raw_parts(*bufs, *buf_count as usize) };
+
+                    let iovecs: Vec<libc::iovec> = bufs_slice
+                        .iter()
+                        .map(|b| libc::iovec {
+                            iov_base: b.buf as *mut libc::c_void,
+                            iov_len: b.len,
+                        })
+                        .collect();
+
+                    let result = unsafe {
+                        libc::pwritev(
+                            fd,
+                            iovecs.as_ptr(),
+                            iovecs.len() as i32,
+                            *offset as libc::off_t,
+                        )
+                    };
+
+                    self.register_write(fd, user_data);
+                    self.post_completion(TorusResult::new(result as i64, user_data));
+                    self.unregister(fd);
+                    submitted += 1;
                 }
             }
         }
 
-        // Every flow submitted here produces exactly one completion (either via
-        // the reactor, the file pool, or an immediate error path).
-        self.in_flight
-            .fetch_add(flows.len() as u32, Ordering::Relaxed);
-        Ok(flows.len())
+        self.in_flight.fetch_add(submitted, Ordering::Relaxed);
+        Ok(submitted as usize)
     }
 
     fn reap(&self, results: &mut Vec<TorusResult>) -> tpt_torus_core::error::Result<usize> {
