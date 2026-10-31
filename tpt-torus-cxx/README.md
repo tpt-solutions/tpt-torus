@@ -8,8 +8,11 @@ This crate builds as a **`cdylib` / `staticlib`** (in addition to a regular Rust
 
 - `torus.h` — the stable C ABI (kept under `include/`), exported by the `cdylib`.
 - `torus.hpp` — C++20 coroutine wrapper providing `co_await torus.read(...)`, `co_await torus.write(...)`, etc.
-- C entry points: `torus_create`, submit/reap/wait, and operation constructors.
-- `generate-header` binary (`cargo run --bin generate-header -p tpt-torus-cxx`) regenerates `torus.h` via `cbindgen` (requires the `generate-header` feature).
+- C entry points:
+  - Lifecycle: `torus_create` (platform-default backend), `torus_create_with_backend`, `torus_destroy`.
+  - Operations: `torus_read`, `torus_write`, `torus_recv`, `torus_send`, `torus_close`, and `torus_submit_batch`.
+  - Completions: `torus_wait`, `torus_reap`, and `torus_in_flight`.
+- `generate-header` binary (`cargo run --bin generate-header -p tpt-torus-cxx --features generate-header`) regenerates `torus.h` via `cbindgen` (requires the `generate-header` feature).
 
 ## Installation
 
@@ -57,7 +60,6 @@ Depends on `tpt-torus-core` and, per target, a backend crate (`tpt-torus-backend
 cargo build -p tpt-torus-cxx --release
 cargo run   -p tpt-torus-cxx --bin generate-header --features generate-header
 ```
-
 ## License
 
 Licensed under either of [MIT](https://opensource.org/licenses/MIT) or [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0) at your option.
