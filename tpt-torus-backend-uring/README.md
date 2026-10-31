@@ -4,15 +4,16 @@ Linux `io_uring` backend engine for [TPT Torus](https://github.com/tpt-solutions
 
 This crate implements the `tpt_torus_core::backend::Backend` trait by mapping the Virtual Torus submission/completion rings **directly onto kernel shared memory** via `mmap`. There is no reactor thread: `io_uring_enter` is the only syscall, and completions are read straight out of the kernel-owned CQ ring.
 
-Requires **Linux kernel 5.1+** (`io_uring`); `IORING_SETUP_SQPOLL` and fixed-buffer I/O require newer kernels.
+Requires **Linux kernel 5.1+** (`io_uring`). Fixed-buffer I/O and SQPOLL need newer kernels, and multishot recv needs **5.20+**.
 
 ## What it provides
 
 - `UringBackend::new(entries)` — create a ring of `entries` SQ/CQ slots (must be a power of two).
 - `UringBackend::new_with_sqpoll(entries, sq_thread_idle)` — enable kernel SQPOLL (polled submissions on a dedicated kernel thread, eliminating `io_uring_enter` on the hot path at the cost of a CPU core). SQPOLL must be set at setup time.
 - `UringBackend::register_buffers` / `unregister_buffers` — kernel fixed-buffer registration (`IORING_REGISTER_BUFFERS`) for zero-copy `IORING_OP_READ_FIXED` / `WRITE_FIXED`.
-- `submit_multi_accept` / `submit_multi_recv` — multishot accept/recv (real `SOCK_MULTISHOT` / `MSG_MULTISHOT`), which stay armed across completions.
+- `submit_multi_accept` / `submit_multi_recv` — multishot accept/recv (real `SOCK_MULTISHOT` / `MSG_MULTISHOT`), which stay armed across completions. Multishot recv draws its buffers from a provided-buffer ring that the backend registers on first use and releases on drop.
 - `cancel_multi` — cancel a multishot operation via `IORING_OP_ASYNC_CANCEL`.
+- `enable_sqpoll` is deprecated; set SQPOLL with `new_with_sqpoll` at setup time.
 
 ## Installation
 
