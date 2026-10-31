@@ -120,6 +120,7 @@ torus.reap(&mut results)?;
 | `torus-rs` | Ergonomic Rust facade (`open()` + re-export of the full core API) |
 | `torus-go` | Go (cgo) bindings over the C ABI |
 | `torus-py` | Python (CFFI) bindings over the C ABI |
+| `cargo-torus-new` | `cargo` subcommand that scaffolds a new project against the `torus-rs` facade |
 
 ## Features
 
@@ -174,6 +175,20 @@ if (result.ok()) {
     std::cout << "Read " << result.bytes() << " bytes\n";
 }
 ```
+
+### Linux io_uring Optimisations
+
+The `tpt-torus-backend-uring` engine exposes kernel features beyond basic
+submission and completion:
+
+- **Zero-copy fixed buffers**: buffers registered through `LeaseRegistry` are
+  pinned with `IORING_REGISTER_BUFFERS` and read/written with
+  `IORING_OP_READ_FIXED` / `IORING_OP_WRITE_FIXED` when the buffer matches a
+  registered region. Register via `Torus::register_leases`.
+- **Multi-shot accept/recv**: `submit_multi_accept` and `submit_multi_recv` use
+  `SOCK_MULTISHOT` / `MSG_MULTISHOT` to keep one submission producing many completions.
+- **SQPOLL**: `UringBackend::new_with_sqpoll` enables `IORING_SETUP_SQPOLL` so the
+  kernel polls the submission queue without a syscall per batch.
 
 ### Hardware Bypass
 
