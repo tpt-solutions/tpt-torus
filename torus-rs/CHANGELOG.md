@@ -11,3 +11,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `torus-rs`: ergonomic Rust facade crate with `torus::open()` and full `tpt-torus-core` API re-export.
 - `hardware` feature (plus `spdk` / `dpdk` / `gpu_direct`) exposing the `hw` module for hardware bypass.
+- `default_backend(ring_entries)` returns the platform-default backend as a boxed `Backend`, for callers that want to construct the `Torus` themselves.

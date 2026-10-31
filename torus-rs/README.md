@@ -6,7 +6,8 @@ Ergonomic Rust bindings for [TPT Torus](https://github.com/tpt-solutions/tpt-tor
 
 ## Features
 
-- `open(ring_entries)` — platform-aware `Torus` constructor (picks the right backend for the current OS).
+- `open(ring_entries)` — platform-aware `Torus` constructor (picks the right backend for the current OS: io_uring on Linux, IOCP on Windows, kqueue on macOS/BSD).
+- `default_backend(ring_entries)` — the same platform selection, returning the boxed `Backend` if you want to build the `Torus` yourself with `Torus::new`.
 - Full re-export of the `tpt-torus-core` API (`Torus`, `Flow`, `Operation`, `LeaseRegistry`, …).
 - `hardware` feature (plus `spdk` / `dpdk` / `gpu_direct`) exposes the `hw` module for user-space NVMe / networking / GPU-Direct bypass.
 
