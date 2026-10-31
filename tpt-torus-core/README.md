@@ -13,6 +13,8 @@ This crate is the public-facing heart of Torus. It is OS-agnostic: it defines th
 - **Safe API** — `LeaseRegistry` tracks registered memory regions; `TorusPanic` deliberately aborts on lease violations instead of letting a bad pointer reach the kernel.
 - **`async_api::TorusAsync`** — high-level `async`/`await` wrapper with per-operation futures (`ReadFuture`, `WriteFuture`, …).
 - **`TorusPool`** — a round-robin pool of `Torus` instances for concurrency across multiple backends/rings.
+- **`observability`** — per-operation metrics (`metrics()`, latency `Histogram`s, error counts) and `FlowSpan` for tracing each flow.
+- **`cgroup::ResourceLimiter`** — cgroup-aware in-flight limiting, so submission respects the container's resource limits.
 
 ## Installation
 
@@ -77,6 +79,7 @@ A violation (out-of-bounds / overlapping / in-flight access) is converted into a
 | Feature   | Effect                                                                 |
 |-----------|------------------------------------------------------------------------|
 | `tracing` | Emits `tracing` spans/events for submission, completion, and lease activity. |
+| `tokio`   | Enables the `async_tokio` module (`TorusAsyncReader` / `TorusAsyncWriter`) for use with tokio's I/O traits. |
 
 ## Relationship to other crates
 

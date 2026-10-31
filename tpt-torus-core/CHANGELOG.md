@@ -11,12 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Zero-copy fixed-buffer I/O: `LeaseRegistry::as_register_buffers`, `Backend::register_buffers` / `unregister_buffers` (no-op default), and `Torus::register_leases`, which bridges registered regions to the kernel (`IORING_REGISTER_BUFFERS` on io_uring).
 - `TorusPool`: round-robin pool of `Torus` instances for concurrent submission across multiple rings/backends.
+- `tokio` feature: `async_tokio` module with `TorusAsyncReader` / `TorusAsyncWriter`, which implement the tokio I/O traits over `TorusAsync`.
+- `observability` module: per-operation `Metrics` with latency `Histogram`s, a global `metrics()` accessor, and `FlowSpan` for tracing each flow from submission to completion.
+- Examples (`hello_read`) and conformance / concurrency / tokio shim test suites.
 
 ### Fixed
 
 - TOCTOU race in `LeaseRegistry::register` (check-then-insert now under a single write lock).
 - Range overflow at `addr == usize::MAX` in `LeaseRegistry`.
 - Unchecked `in_flight` counter overflow (now uses `saturating_add` / `saturating_sub`).
+- `Result` error codes are now negated consistently with the `-errno` convention used by the backends.
 
 ## [0.1.0] - 2026-07-22
 
