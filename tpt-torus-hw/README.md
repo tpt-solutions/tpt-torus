@@ -14,8 +14,8 @@ All integrations are **feature-gated** and degrade gracefully to `HwError::NotAv
 | `dpdk`       | `dpdk`        | Poll-mode networking via `libdpdk` (`Mempool`, `Mbuf`).  |
 | `gpu_direct` | `gpu_direct`  | `GpuDirect` + `GpuBuffer` for NVMe↔GPU VRAM DMA.         |
 | `cuda`       | `gpu_direct`  | CUDA Driver API FFI (dynamically loaded).               |
-| `dma_pool`   | `gpu_direct` (unix) | DMA-capable memory pool.                          |
-| `nvme_gpu`   | `gpu_direct` (linux) | NVMe→GPU transfer orchestration.                   |
+| `dma_pool`   | `gpu_direct` (linux) | DMA-capable memory pool.                          |
+| `nvme_gpu`   | `gpu_direct` (linux) | NVMe→GPU transfer orchestration (`GpuDirectNvme`, NVMe passthrough commands). |
 | `xdp`        | `xdp`         | AF_XDP / eBPF packet processing without hugepages.       |
 
 ## Installation
@@ -32,9 +32,12 @@ Enable only the features you need. With no features, the crate compiles to a thi
 ```rust,no_run
 use tpt_torus_hw::gpu_direct::GpuDirect;
 
+use tpt_torus_hw::gpu_direct::{GpuBuffer, GpuDirect};
+
 let mut gd = GpuDirect::new(0, 4).expect("gpu direct"); // GPU 0, 4 DMA engines
-let gpu_buf = tpt_torus_hw::gpu_direct::GpuBuffer::new(0, dev_ptr, size);
-gd.nvme_to_gpu(lba, &gpu_buf, 0, len).expect("dma");
+let gpu_buf = GpuBuffer::alloc(0, 1 << 20).expect("gpu alloc"); // 1 MiB on GPU 0
+// (nvme_lba, nvme_ns_id, destination buffer, offset into it, length in bytes)
+gd.nvme_to_gpu(lba, 1, &gpu_buf, 0, len).expect("dma");
 gd.sync_all().expect("sync");
 ```
 
