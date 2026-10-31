@@ -6,7 +6,8 @@ Raw, unsafe FFI bindings to `io_uring` (Linux), IOCP (Windows), and `kqueue` (ma
 
 ## What's inside
 
-- **`io_uring` (Linux)** — `io_uring_sqe`, `io_uring_cqe`, `io_uring_params`, and the `io_sqring_offsets` / `io_cqring_offsets` structs, plus the full set of ABI constants: `opcodes`, `sqe_flags`, `ioprio_flags` (multishot accept/recv), `setup_flags`, `features`, `cqe_flags`, `enter_flags`. Thin syscall helpers `queue_init` / `queue_exit` wrap `io_uring_setup` and `close`.
+- **`io_uring` (Linux)** — `io_uring_sqe`, `io_uring_cqe`, `io_uring_params`, the `io_sqring_offsets` / `io_cqring_offsets` structs, and the provided-buffer ring types `io_uring_buf` / `io_uring_buf_reg`. Constants cover `opcodes`, `sqe_flags`, `ioprio_flags` (multishot accept/recv), `setup_flags`, `features`, `cqe_flags`, `enter_flags`, `IORING_REGISTER_PBUF_RING`, and the ring mmap offsets in `mmap_offsets` (`IORING_OFF_*`).
+- **Syscall wrappers (Linux)** — `io_uring_setup`, `io_uring_enter`, `io_uring_enter2`, `io_uring_register`, and `io_uring_unregister` are thin wrappers over `libc::syscall`. Thin helpers `queue_init` / `queue_exit` wrap `io_uring_setup` and `close`.
 - **IOCP (Windows)** — the type/constant surface used by `tpt-torus-backend-iocp`.
 - **kqueue (macOS/BSD)** — raw `kevent`/`kqueue` FFI is declared inline in `tpt-torus-backend-kqueue` (the kqueue ABI is small enough to inline), so `tpt-torus-sys` focuses on `io_uring` + shared helpers.
 
@@ -20,7 +21,7 @@ All structs are laid out to match the kernel headers exactly. If you change a fi
 | Windows   | IOCP constants/defs                          | yes      |
 | macOS/BSD | (kqueue inlined in the backend crate)        | yes      |
 
-The crate is safe to include as a dependency on any target; the Linux `extern` block and helpers are gated so they only compile where relevant.
+The crate is safe to include as a dependency on any target; the Linux syscall wrappers and io_uring helpers are gated so they only compile where relevant.
 
 ## Installation
 
