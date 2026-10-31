@@ -10,3 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Initial fuzz harness: `flow_creation`, `result_parsing`, and `operation_validate` targets over `tpt-torus-core`.
+
+### Changed
+
+- Excluded from the root workspace (`exclude = ["fuzz"]`); build it separately with `cargo +nightly fuzz`.
+
+### Fixed
+
+- `flow_creation` target bounds corrected.
