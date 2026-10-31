@@ -9,7 +9,8 @@ Windows only (`cfg(windows)`).
 ## What it provides
 
 - `IocpBackend::new()` — create the backend, spinning up the background completion reactor thread.
-- Full `Backend` impl covering the same `Operation` set as the other engines (read/write/send/recv/accept/connect/close), bridged onto native overlapped I/O (`ReadFileEx` / `WSASend` / `WSARecv` / `AcceptEx`, etc.).
+- Full `Backend` impl covering the same `Operation` set as the other engines (read/write/readv/writev/send/recv/accept/connect/close), bridged onto native overlapped I/O: `ReadFile` / `WriteFile` for file handles, `WSASend` / `WSARecv` for sockets, and `AcceptEx` / `ConnectEx` for connection setup.
+- Vectored `readv` / `writev` issue one overlapped operation per buffer.
 
 ## Installation
 
